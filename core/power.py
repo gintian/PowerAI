@@ -167,8 +167,10 @@ class Power:
         :param ex: str.
         :param drop_useless: bool. Drop useless columns to save memory.
                                    It would use default value for saving file.
-        :return: pd.DataFrame.
+        :return: pd.DataFrame or None.
         """
+        if not os.path.exists(file_name):
+            return None
         etype, columns, indices, ex = self.get_column_and_index(file_name, fmt, ex)
         if ex == 'l1':
             converters = {'name': f_name_conv, 'st_name': f_name_conv}
@@ -241,8 +243,10 @@ class Power:
         :param ex: str.
         :param flag: str. lp or st.
         :param drop_useless: bool.
-        :return: pd.DataFrame. Concatenated df.
+        :return: pd.DataFrame or None. Concatenated df.
         """
+        if not os.path.exists(file_name):
+            return None
         etype, columns, indices, ex = self.get_column_and_index(file_name, fmt, ex)
         skiprows = 1 if ex == 'lp1' else 0
         if drop_useless and etype in self.useless_columns:
@@ -265,7 +269,7 @@ class Power:
         """
         Load ST.S* files using load_lp with the same parameter.
 
-        :return: pd.DataFrame. Concatenated df.
+        :return: pd.DataFrame or None. Concatenated df.
         """
         if ex is None and '.' in file_name:
             ex = file_name[file_name.rindex('.') + 1:].lower()
@@ -293,7 +297,10 @@ class Power:
             source = file_or_buffer
             assert ex is not None
         elif isinstance(file_or_buffer, str):
-            source = open(file_or_buffer, 'r', encoding='gbk')
+            try:
+                source = open(file_or_buffer, 'r', encoding='gbk')
+            except FileNotFoundError:
+                return {}
         else:
             raise NotImplementedError("Unknown format. " + type(file_or_buffer))
         names, columns, indices, ex = self.get_column_and_index(file_or_buffer, fmt, ex)
@@ -495,26 +502,30 @@ class Power:
         bit = 1 if flag == 'lp' else 2
         return df['flag'] & bit > 0
 
-    def drop_data(self, etype, fmt, flag):
+    def drop_data(self, fmt, flag, etypes=None):
         """
         Drop lp or st data.
 
-        :param etype: str. Equipment type.
+        :param etypes: [str] or None. Equipment type.
         :param fmt: str.
         :param flag: str, lp or st.
         """
-        if flag == 'lp':
-            ex1 = self.format_key[etype][1]
-        elif flag == 'st':
-            ex1 = self.format_key[etype][2]
-        flags = Power.get_flag(self.data[etype], flag)
-        if ex1 is None or not np.any(flags):
-            return
-        columns1 = self.get_flat_columns(fmt, etype, ex1)
-        columns0 = self.get_flat_columns(fmt, etype, self.format_key[etype][0])
-        drops = [col for col in columns1 if col not in columns0]
-        self.data[etype].drop(columns=drops, inplace=True)
-        Power.set_flag(self.data[etype], False, flag)
+        if not etypes:
+            etypes = self.data.keys()
+        for etype in etypes:
+            if flag == 'lp':
+                ex1 = self.format_key[etype][1]
+            elif flag == 'st':
+                ex1 = self.format_key[etype][2]
+            flags = Power.get_flag(self.data[etype], flag)
+            if ex1 is None or not np.any(flags):
+                continue
+            columns1 = self.get_flat_columns(fmt, etype, ex1)
+            columns0 = self.get_flat_columns(fmt, etype, self.format_key[etype][0])
+            drops = [col for col in columns1
+                     if col not in columns0 and col in self.data[etype].columns]
+            self.data[etype].drop(columns=drops, inplace=True)
+            Power.set_flag(self.data[etype], False, flag)
 
     def describe(self):
         """
@@ -526,26 +537,30 @@ class Power:
             n_st = Power.get_flag(df, 'st').sum()
             print('[%s]: n_lf=%d, n_lp=%d, n_st=%d' % (name, n_lf, n_lp, n_st))
 
-    def load_power(self, path, fmt='on', lp=True, st=True, station=True, shorten=True):
+    def load_power(self, path, fmt='on', lf=True, lp=True, st=True,
+                   station=True, shorten=True):
         """
         Load power from data directory.
 
         :param path: str.
         :param fmt: str.
+        :param lf: bool. Whether load lf files.
         :param lp: bool. Whether load lp files.
         :param st: bool. Whether load st files.
         :param station: bool. Whether load station infos.
         :param shorten: bool. Use shorten storage.
         """
-        self.data['bus'] = self.load_lf(path + '/LF.L1', fmt)
-        self.data['acline'] = self.load_lf(path + '/LF.L2', fmt)
-        self.data['transformer'] = self.load_lf(path + '/LF.L3', fmt)
-        self.data['generator'] = self.load_lf(path + '/LF.L5', fmt)
-        self.data['load'] = self.load_lf(path + '/LF.L6', fmt)
-        self.data.update(self.load_mlf(path + '/LF.NL4', fmt=fmt))
-        self.data.update(self.load_mlf(path + '/LF.ML4', fmt=fmt, header_char='#'))
-        self.data['dcbus']['name'] = self.data['bus'].loc[self.data['dcbus']['bus'],
-                                                          'name']
+        if lf:
+            self.data['bus'] = self.load_lf(path + '/LF.L1', fmt)
+            self.data['acline'] = self.load_lf(path + '/LF.L2', fmt)
+            self.data['transformer'] = self.load_lf(path + '/LF.L3', fmt)
+            self.data['generator'] = self.load_lf(path + '/LF.L5', fmt)
+            self.data['load'] = self.load_lf(path + '/LF.L6', fmt)
+            self.data.update(self.load_mlf(path + '/LF.NL4', fmt=fmt))
+            self.data.update(self.load_mlf(path + '/LF.ML4', fmt=fmt, header_char='#'))
+            if self.data.get('dcbus', None):
+                self.data['dcbus']['name'] =\
+                    self.data['bus'].loc[self.data['dcbus']['bus'], 'name']
         if lp:
             self.data['bus'] = self.load_lp(path + '/LF.LP1', self.data['bus'], fmt)
             self.data['acline'] = self.load_lp(path + '/LF.LP2',
@@ -568,7 +583,8 @@ class Power:
                                                   self.data['generator'], fmt)
             self.data['load'] = self.load_st(path + '/ST.S6', self.data['load'], fmt)
             self.data.update(self.load_mlf(path + '/ST.NS4', self.data, fmt))
-            self.data['vsc'] = self.load_st(path + '/ST.MS4', self.data['vsc'], fmt)
+            if 'vsc' in self.data:
+                self.data['vsc'] = self.load_st(path + '/ST.MS4', self.data['vsc'], fmt)
         if shorten:
             self.shorten_storage(fmt=fmt)
         if station:
@@ -681,12 +697,13 @@ class Power:
         self.data['load']['st_no'] = \
             self.data['bus'].loc[self.data['load'].bus, 'st_no'].values
 
-    def save_power(self, path, fmt='on', lp=True, st=True, miss='fill'):
+    def save_power(self, path, fmt='on', lf=True, lp=True, st=True, miss='fill'):
         """
         Save power to power directory.
 
         :param path: str.
         :param fmt: str.
+        :param lf: bool. Whether save lf files.
         :param lp: bool. Whether save lp files.
         :param st: bool. Whether save st files.
         :param miss: str, fill or raise.
@@ -695,14 +712,17 @@ class Power:
             print("Format mismatch: load is %s, save is %s" % (self.fmt, fmt))
         if not os.path.exists(path):
             os.mkdir(path)
-        self.save_lf(path + '/LF.L1', self.data['bus'], fmt=fmt,
-                     ori_order=False, miss=miss)
-        self.save_lf(path + '/LF.L2', self.data['acline'], fmt=fmt, miss=miss)
-        self.save_lf(path + '/LF.L3', self.data['transformer'], fmt=fmt, miss=miss)
-        self.save_lf(path + '/LF.L5', self.data['generator'], fmt=fmt, miss=miss)
-        self.save_lf(path + '/LF.L6', self.data['load'], fmt=fmt, miss=miss)
-        self.save_mlf(path + '/LF.NL4', self.data, fmt=fmt, miss=miss)
-        self.save_mlf(path + '/LF.ML4', self.data, fmt=fmt, miss=miss)
+        if lf:
+            self.save_lf(path + '/LF.L1', self.data['bus'], fmt=fmt,
+                         ori_order=False, miss=miss)
+            self.save_lf(path + '/LF.L2', self.data['acline'], fmt=fmt, miss=miss)
+            self.save_lf(path + '/LF.L3', self.data['transformer'], fmt=fmt, miss=miss)
+            self.save_lf(path + '/LF.L5', self.data['generator'], fmt=fmt, miss=miss)
+            self.save_lf(path + '/LF.L6', self.data['load'], fmt=fmt, miss=miss)
+            if 'dcline' in self.data:
+                self.save_mlf(path + '/LF.NL4', self.data, fmt=fmt, miss=miss)
+            if 'dcbus' in self.data:
+                self.save_mlf(path + '/LF.ML4', self.data, fmt=fmt, miss=miss)
         if lp:
             self.save_lf(path + '/LF.LP1', self.data['bus'], fmt=fmt,
                          ori_order=False, miss=miss)
@@ -710,8 +730,10 @@ class Power:
             self.save_lf(path + '/LF.LP3', self.data['transformer'], fmt=fmt, miss=miss)
             self.save_lf(path + '/LF.LP5', self.data['generator'], fmt=fmt, miss=miss)
             self.save_lf(path + '/LF.LP6', self.data['load'], fmt=fmt, miss=miss)
-            self.save_mlf(path + '/LF.NP4', self.data, fmt=fmt, miss=miss)
-            self.save_mlf(path + '/LF.MP4', self.data, fmt=fmt, miss=miss)
+            if 'dcline' in self.data:
+                self.save_mlf(path + '/LF.NP4', self.data, fmt=fmt, miss=miss)
+            if 'dcbus' in self.data:
+                self.save_mlf(path + '/LF.MP4', self.data, fmt=fmt, miss=miss)
         if st:
             self.save_lf(path + '/ST.S1', self.data['bus'], fmt=fmt,
                          ori_order=False, miss=miss)
@@ -719,8 +741,10 @@ class Power:
             self.save_lf(path + '/ST.S3', self.data['transformer'], fmt=fmt, miss=miss)
             self.save_lf(path + '/ST.S5', self.data['generator'], fmt=fmt, miss=miss)
             self.save_lf(path + '/ST.S6', self.data['load'], fmt=fmt, miss=miss)
-            self.save_mlf(path + '/ST.NS4', self.data, fmt=fmt, miss=miss)
-            self.save_lf(path + '/ST.MS4', self.data['vsc'], fmt=fmt, miss=miss)
+            if 'dcline' in self.data:
+                self.save_mlf(path + '/ST.NS4', self.data, fmt=fmt, miss=miss)
+            if 'vsc' in self.data:
+                self.save_lf(path + '/ST.MS4', self.data['vsc'], fmt=fmt, miss=miss)
 
     @staticmethod
     def statistic_acline(aclines):

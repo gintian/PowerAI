@@ -14,3 +14,10 @@ def call_parallel(x):
 
 def set_isin(sub, whole):
     return all([s in whole for s in sub])
+
+
+def dict_list_append(data, key, value):
+    if key in data:
+        data[key].append(value)
+    else:
+        data[key] = [value]

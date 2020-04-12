@@ -36,6 +36,16 @@ def call_psa(path):
     run_cmd(args)
 
 
+def check_lfcal(path):
+    file_name = os.path.join(path, 'LF.CAL')
+    if not os.path.exists(file_name):
+        return False
+    with open(file_name, 'r') as fp:
+        line = fp.readline()
+        ret = (int(line.split(',')[0]) == 1)
+    return ret
+
+
 def call_wmlf(path):
     source = register_cmds['wmlf']
     if os.name == 'nt':
@@ -50,6 +60,8 @@ def call_wmlf(path):
         for t in targets:
             shutil.copy(os.path.join(source, t), os.path.join(p, t))
         run_cmd([os.path.join(p, wmlf)], cwd=p)
+        for t in targets:
+            os.remove(os.path.join(p, t))
 
 
 def call_tools(path, **kwargs):
