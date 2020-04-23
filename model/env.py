@@ -28,6 +28,13 @@ CCT_CHANGE_RATIO = 10.
 
 class OpEnv(object):
     def __init__(self, base_path, work_path, inputs, fmt='on'):
+        """ 初始化。
+
+        :param base_path: str. 初始断面存放目录。
+        :param work_path: str. Env工作目录。
+        :param inputs: {etype: [str]}. 强化学习模型的输入量。
+        :param fmt: str. 数据格式类型。
+        """
         self.power = Power(fmt)
         self.fmt = fmt
         self.base_path = base_path
@@ -41,6 +48,14 @@ class OpEnv(object):
         self.inputs = inputs
 
     def get_ep_path(self, ep=None, step=None):
+        """ 获取指定episode和step的工作目录。
+
+        :param ep: int. 指定episode；
+                   or None. 使用当前episode。
+        :param step: int. 指定step；
+                     or None. 返回episode对应目录。
+        :return: str.
+        """
         if ep is None:
             ep = self.episode
         if step is None:
@@ -48,7 +63,17 @@ class OpEnv(object):
         return os.path.join(self.work_path, 'ep%06d' % ep, str(step))
 
     def reset(self, random=True, load_path=None):
-        self.power.load_power(self.base_path, fmt=self.fmt)
+        """ 重置潮流，并进行评估。
+
+        :param random: bool. 是否随机初始化潮流。
+        :param load_path: str. 初始断面目录；
+                          or None. 用self.base_path作为初始断面。
+        :return: bool. 是否重置成果(not done)
+        """
+        if load_path is None:
+            self.power.load_power(self.base_path, fmt=self.fmt)
+        else:
+            self.power.load_power(load_path, fmt=self.fmt)
         self.power.data['generator']['p0'] = self.power.data['generator']['p']
         self.episode += 1
         path = self.get_ep_path()
@@ -69,14 +94,17 @@ class OpEnv(object):
             load_p = np.sum(loads['p'])
             distribute_loads_p(loads, 0.9 * gen_p - load_p, p_sigma=0.1, keep_factor=False)
             random_load_q0(loads, sigma=None)
-        elif load_path is not None:
-            self.power.load_power(load_path, fmt=self.fmt)
         self.min_max = None
         self.init_load_p = 0.
         self.state0, _, done = self.run_step()
         return not done
 
     def get_state(self, normalize=True):
+        """ 获取当前输入量数值
+
+        :param normalize: bool. True返回归一化数据；False返回原始数据。
+        :return: np.array.
+        """
         state = []
         for etype, columns in self.inputs.items():
             state.append(self.power.data[etype][columns].values.T.reshape(-1))
@@ -87,6 +115,9 @@ class OpEnv(object):
         return state
 
     def load_init_info(self):
+        """ 获取初始状态，包括输入量的上下限和总负荷功率。
+
+        """
         values = []
         for etype, columns in self.inputs.items():
             for col in columns:
@@ -102,6 +133,11 @@ class OpEnv(object):
 
     @staticmethod
     def make_assessment(path):
+        """ 对断面稳定结果进行打分。
+
+        :param path: str. 指定断面目录，包含*.res结果文件。
+        :return: (float, bool, np.array). 评分、结束标志、稳定结果。
+        """
         headers = {'CCTOUT': 'no desc name cct gen1 gen2 times tmp1 tmp2'}
         update_table_header(path, 'res', headers)
         iwant = {'CCTOUT': ['name', 'cct']}
@@ -125,6 +161,12 @@ class OpEnv(object):
         return thrs[-1], False, results
 
     def run_step(self, actions=None):
+        """ 按照给定actions运行一步。
+
+        :param actions: str. “random"，随机初始化，仅用于测试；
+                        or dict. 动作集合，由load_action函数执行动作。
+        :return: (np.array, float, bool). 状态量、回报值、结束标志。
+        """
         self.step += 1
         path = self.get_ep_path(step=self.step)
         if actions == 'random':  # just for test
@@ -172,6 +214,12 @@ class OpEnv(object):
         return state, reward, done
 
     def load_action(self, actions):
+        """ 加载潮流修改动作，但不计算潮流。
+
+        :param actions: dict. 动作字典：'load_ratio_p'~按比例调整负荷有功；
+                                       'generator_ratio_p'~按比例调整机组有功。
+        :return: np.array. 归一化的状态量。
+        """
         for k in actions:
             if k == 'load_ratio_p':
                 set_gl_p0(self.power.data['load'],
@@ -184,6 +232,11 @@ class OpEnv(object):
         return self.get_state()
 
     def print_info(self, state=True, assessment=True):
+        """ 打印每步信息。
+
+        :param state: bool. 是否打印状态量。
+        :param assessment: bool. 是否打印评分值。
+        """
         print('episode = %d, step = %d' % (self.episode, self.step))
         if state:
             print('state =', self.get_state())
@@ -192,6 +245,13 @@ class OpEnv(object):
 
 
 def load_trend(path, fmt, inputs):
+    """ 重新加载一个episode中每个step的潮流信息、评分和稳定结果，用于事后分析。
+
+    :param path: str. Episode目录。
+    :param fmt: str. 数据格式类型。
+    :param inputs: {etype: [str]}. 强化学习模型的输入量，以及'score'和'res'。
+    :return: {etype: np.array}.
+    """
     data = {}
     for i in range(len(os.listdir(path))):
         sub_path = os.path.join(path, str(i))
