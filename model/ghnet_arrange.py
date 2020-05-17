@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 
-from core.power_yz import calc_ed_from_power
+from core.yz import calc_ed_from_power
 from core.power import load_station_info, Power
 
 

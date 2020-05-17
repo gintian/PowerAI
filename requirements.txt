@@ -5,5 +5,5 @@ scikit-learn
 tensorflow
 tensorflow-probability
 networkx
-glob
+glob2
 pytables

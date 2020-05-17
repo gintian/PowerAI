@@ -7,7 +7,7 @@
 import os
 import pandas as pd
 import numpy as np
-import glob
+import glob2
 from io import StringIO
 
 from core.power import Power
@@ -121,7 +121,7 @@ def unpack_data(path, file_name, fmt='on', types=None, models=None, dirs=None):
 def collect_learning_data(path, etype, columns=None):
     print('collecting data...')
     file_name = etype + '.dat'
-    files = glob.glob(os.path.join(path, '**', file_name), recursive=True)
+    files = glob2.glob(os.path.join(path, '**', file_name), recursive=True)
     total = len(files)
     if total == 0:
         print('No data file [%s]' % file_name)
@@ -146,7 +146,7 @@ def collect_learning_data(path, etype, columns=None):
 
 def collect_learning_res(path, rtypes):
     print('collecting result...')
-    files = glob.glob(os.path.join(path, '**', '*.res'), recursive=True)
+    files = glob2.glob(os.path.join(path, '**', '*.res'), recursive=True)
     total = len(files)
     if total == 0:
         print('No res file')

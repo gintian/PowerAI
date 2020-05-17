@@ -20,8 +20,7 @@ from core.topo import PowerGraph
 
 
 def f_name_conv(x):
-    """
-    Trim string, used in reading LFs.
+    """ 去除字符串前后的空格和单引号。
 
     :param x: str.
     :return: str.
@@ -29,40 +28,24 @@ def f_name_conv(x):
     return x.strip(' \'')
 
 
-def f_vbase_conv(v):
-    """
-    Convert voltage level, from float to integer.
+def get_vl_from_vbase(v):
+    """ 把浮点型电压基值转换为整数型电压等级。
 
-    :param v: float. Voltage base.
-    :return: integer. Voltage level.
+    :param v: pd.Series or np.array. 浮点型电压基值列向量。
+    :return: np.array. 整数型电压等级列向量。
     """
-    if v > 900.:
-        return 1000
-    elif v > 700.:
-        return 750
-    elif v > 450.:
-        return 500
-    elif v > 300.:
-        return 330
-    elif v > 200.:
-        return 220
-    elif v > 100.:
-        return 110
-    elif v > 30.:
-        return 35
-    elif v > 5.:
-        return 20
-    return 1
+    bins = np.array([5., 30., 50., 100., 200., 300., 360., 450., 550., 650., 790., 900.])
+    vls = np.array([1, 20, 35, 66, 110, 220, 330, 400, 500, 600, 750, 800, 1000])
+    return vls[np.digitize(v, bins)]
 
 
 def load_elem_info(file_name, etypes=[], index_col=['name']):
-    """
-    Load element infos.
+    """ 加载各类设备的基本信息。
 
-    :param file_name: str.
-    :param etypes: [str]. Used element types.
-    :param index_col: list of str. Index.
-    :return: pd.DataFrame.
+    :param file_name: str. 文件路径和名称。
+    :param etypes: [int]. 所需加载的设备类型。
+    :param index_col: list of str. 设备列表索引列名。
+    :return: pd.DataFrame. 设备信息表。
     """
     elems = pd.read_table(file_name, encoding='gbk', sep=' ', index_col=index_col)
     if len(etypes) > 0:
@@ -71,12 +54,11 @@ def load_elem_info(file_name, etypes=[], index_col=['name']):
 
 
 def load_station_info(file_name, index_col=['name']):
-    """
-    Load station infos.
+    """ 加载厂站的基本信息。
 
-    :param file_name: str.
-    :param index_col: list of str. Index.
-    :return: pd.DataFrame.
+    :param file_name: str. 文件路径和名称。
+    :param index_col: list of str. 厂站列表索引列名。
+    :return: pd.DataFrame. 厂站信息表。
     """
     st_info = pd.read_table(file_name, encoding='gbk', sep=' ', index_col=index_col)
     return st_info
@@ -84,15 +66,15 @@ def load_station_info(file_name, index_col=['name']):
 
 class Power:
     """
-    Power class deal with PSASP data.
+    处理PSASP数据文件的类。
 
     Attributes:
         format_key, format_type, file_format, index_dict, output_format,
         multi_line_header, useless_columns:
-            dict. Configuration for loading and saving LFs.
-        fmt: str. Format template, 'on', 'off' or user defined.
-        data: dict of pd.DataFrame. All loaded data are stored here.
-        station: pd.DataFrame. Station infos.
+            dict. PSASP数据文件读写行为的配置信息。
+        fmt: str. 格式模板，'on', 'off' 或用户自定义。
+        data: dict of pd.DataFrame. 数据存储字典。
+        station: pd.DataFrame. 厂站信息表。
     """
 
     def __init__(self, fmt):
@@ -109,12 +91,12 @@ class Power:
         self.stations = None
 
     def get_column_and_index(self, file_name, fmt='on', ex=None):
-        """
-        Get relevent infos of the file, including etype, columns, index and ex.
+        """ 获取文件相关的设备类型、列名、索引和文件扩展名。
 
-        :param file_name: std.
-        :param fmt: str. Format template.
-        :param ex: str. None for getting extension name from file_name.
+        :param file_name: str. 文件路径和名称。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+                   or None. 从file_name中获取扩展名。
         :return: (etype, columns, index, ex).
         """
         if ex is None and '.' in file_name:
@@ -130,12 +112,11 @@ class Power:
         return etypes, columns, indices, ex
 
     def get_flat_columns(self, fmt, etype, ex):
-        """
-        Get flatten columns.
+        """ 获取展开的列名，主要用于多行文件。
 
-        :param fmt: str.
-        :param etype: str.
-        :param ex: str.
+        :param fmt: str. 格式模板。
+        :param etype: str. 设备类型。
+        :param ex: str. 文件扩展名。
         :return: [columns].
         """
         if ex in self.format_type['single']:
@@ -144,11 +125,10 @@ class Power:
             return list(chain(*self.file_format[fmt][ex + '_' + etype]))
 
     def get_flag_valid(self, df, ex):
-        """
-        Get valid lp or st lines.
+        """ 获取有效的lp或st记录条目。
 
-        :param df: pd.DataFrame.
-        :param ex: str.
+        :param df: pd.DataFrame. 数据表。
+        :param ex: str. 文件扩展名。
         :return: pd.Series of bool.
         """
         if ex in self.format_key['lp']:
@@ -159,14 +139,12 @@ class Power:
             return pd.Series(data=True, index=df.index)
 
     def load_lf(self, file_name, fmt='on', ex=None, drop_useless=True):
-        """
-        Load LF.L* files.
+        """ 加载 LF.L* 文件。
 
-        :param file_name: str.
-        :param fmt: str.
-        :param ex: str.
-        :param drop_useless: bool. Drop useless columns to save memory.
-                                   It would use default value for saving file.
+        :param file_name: str. 文件路径和名称。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param drop_useless: bool. 删除无用的列，节省内存开销。
         :return: pd.DataFrame or None.
         """
         if not os.path.exists(file_name):
@@ -197,15 +175,14 @@ class Power:
         return df
 
     def save_lf(self, file_name, df, fmt='on', ex=None, ori_order=True, miss='fill'):
-        """
-        Save LF.L* files.
+        """ 保存 LF.L* 文件。
 
-        :param file_name: str.
-        :param df: pd.DataFrame.
-        :param fmt: str.
-        :param ex: str.
-        :param ori_order: bool. Use the original order while the df is loaded.
-        :param miss: str, fill or raise. Fill default value or raise exception.
+        :param file_name: str. 文件路径和名称。
+        :param df: pd.DataFrame. 数据表。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param ori_order: bool. 采用原始顺序输出，否则按照索引排序后顺序输出。
+        :param miss: str, fill or raise. 遇到缺失的列选择默认值填充或者报错。
         """
         etype, columns, _, ex = self.get_column_and_index(file_name, fmt, ex)
         if ori_order and 'ori_order' in df.columns:
@@ -234,16 +211,16 @@ class Power:
 
     def load_lp(self, file_name, base=None, fmt='on', ex=None, flag='lp',
                 drop_useless=True):
-        """
-        Load LF.LP* and ST.S* files.
+        """ 加载 LF.LP* 或 ST.S* 文件。
 
-        :param file_name: str.
-        :param base: pd.DataFrame. Base df of LF.
-        :param fmt: str.
-        :param ex: str.
-        :param flag: str. lp or st.
-        :param drop_useless: bool.
-        :return: pd.DataFrame or None. Concatenated df.
+        :param file_name: str. 文件路径和名称。
+        :param base: pd.DataFrame. 原始数据表，此时新读入信息会添加到原数据表的后面；
+                     or None. 无原始数据表，则返回新数据表。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param flag: str. lp or st. 文件类型，lp为潮流结果，st为动态参数。
+        :param drop_useless: bool. 删除无用的列。
+        :return: pd.DataFrame or None.
         """
         if not os.path.exists(file_name):
             return None
@@ -266,10 +243,16 @@ class Power:
 
     def load_st(self, file_name, base=None, fmt='on', ex=None, flag='st',
                 drop_useless=True):
-        """
-        Load ST.S* files using load_lp with the same parameter.
+        """ 加载 ST.S* 文件。
 
-        :return: pd.DataFrame or None. Concatenated df.
+        :param file_name: str. 文件路径和名称。
+        :param base: pd.DataFrame. 原始数据表，此时新读入信息会添加到原数据表的后面；
+                     or None. 无原始数据表，则返回新数据表。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param flag: str. lp or st. 文件类型，lp为潮流结果，st为动态参数。
+        :param drop_useless: bool. 删除无用的列。
+        :return: pd.DataFrame or None.
         """
         if ex is None and '.' in file_name:
             ex = file_name[file_name.rindex('.') + 1:].lower()
@@ -282,15 +265,16 @@ class Power:
 
     def load_mlf(self, file_or_buffer, base=None, fmt='on',
                  ex=None, header_char=None, drop_useless=True):
-        """
-        Load multi-line files, including NL4, NP4, NS4, ML4, MP4.
+        """ 加载多行格式的文件，包括NL4, NP4, NS4, ML4, MP4。
 
-        :param file_or_buffer: str or StringIO.
-        :param base: pd.DataFrame. Base df of LF.
-        :param fmt: str.
-        :param ex: str.
-        :param header_char: Separator of header, None for NL4, NP4, NS4, # for ML4, MP4.
-        :param drop_useless: str.
+        :param file_or_buffer: str or StringIO. 文件路径和名称，或文件数据缓冲。
+        :param base: pd.DataFrame. 原始数据表，此时新读入信息会添加到原数据表的后面。
+                     or None. 无原始数据表，则返回新数据表。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param header_char: 多行格式的分隔符，ML4和MP4采用'#'；
+               None. 无分隔符模式，如NL4、NP4、NS4。
+        :param drop_useless: bool. 删除无用的列。
         :return: {str: pd.DataFrame}. {etype: df}.
         """
         if isinstance(file_or_buffer, StringIO):
@@ -381,14 +365,13 @@ class Power:
         return base
 
     def save_mlf(self, file_name, data, fmt='on', ex=None, miss='fill'):
-        """
-        Save multi-line files, including NL4, NP4, NS4, ML4, MP4.
+        """ 保存多行格式的文件，包括NL4, NP4, NS4, ML4, MP4。
 
-        :param file_name: str.
-        :param data: {str: pd.DataFrame}. {etype: df}.
-        :param fmt: str.
-        :param ex: str.
-        :param miss: str, fill or raise. Fill default value or raise exception.
+        :param file_name: str. 文件路径和名称。
+        :param data: {str: pd.DataFrame}. {etype: df}. 数据字典。
+        :param fmt: str. 格式模板。
+        :param ex: str. 文件扩展名。
+        :param miss: str, fill or raise. 缺失列处理方式。
         """
         etypes, columns, _, ex = self.get_column_and_index(file_name, fmt, ex)
         headers = self.multi_line_header[ex]
@@ -417,12 +400,11 @@ class Power:
                     fp.write(out_fmt % tuple(values))
 
     def get_output_format(self, ex, columns, dtypes):
-        """
-        Get output format string.
+        """ 获取输出文件的格式字符串。
 
-        :param ex: str.
-        :param columns: [str].
-        :param dtypes: pd.Series.
+        :param ex: str. 文件扩展名。
+        :param columns: [str]. 列名列表。
+        :param dtypes: pd.Series. 数据表每列的数据类型。
         :return: str.
         """
         default = self.output_format['default']
@@ -434,15 +416,14 @@ class Power:
         return ','.join(formats)
 
     def check_columns(self, df, etype, columns=None, ex=None, fmt='on'):
-        """
-        Get the missing columns of designated file type.
+        """ 检查缺失列。
 
-        :param df: pd.DataFrame.
-        :param etype: str. Equipment type.
-        :param columns: [str]. Target columns.
-        :param ex: str. Extension name of file.
-        :param fmt: str. Format template.
-        :return: [str]. Missing columns.
+        :param df: pd.DataFrame. 数据表。
+        :param etype: str. 设备类型。
+        :param columns: [str]. 列名列表。
+        :param ex: str. 文件扩展名。
+        :param fmt: str. 格式模板。
+        :return: [str]. 缺失列的列表。
         """
         if not columns:
             if isinstance(self.format_key[ex], list):
@@ -452,12 +433,11 @@ class Power:
         return [col for col in df.columns if col not in columns]
 
     def fill_default(self, df, ex, columns):
-        """
-        Fill default values of designated columns.
+        """ 按默认值进行填充。
 
-        :param df: pd.DataFrame.
-        :param ex: str. Extension name.
-        :param columns: [str]. Target columns.
+        :param df: pd.DataFrame. 数据表。
+        :param ex: str. 文件扩展名。
+        :param columns: [str]. 目标列名的列表。
         """
         for col in columns:
             value = self.output_format[ex][col][0]
@@ -470,11 +450,11 @@ class Power:
 
     @staticmethod
     def set_flag(df, valid, flag):
-        """
-        Set each line's flag of lp or st.
-        :param df: pd.DataFrame.
-        :param valid: bool or [bool].
-        :param flag: str, lp or st.
+        """ 设置lp或st标志位。
+
+        :param df: pd.DataFrame. 数据表。
+        :param valid: bool or [bool]. 有效标志位。
+        :param flag: str, lp or st. 标志类型。
         """
         if flag == 'lp':
             bit = 1
@@ -491,11 +471,11 @@ class Power:
 
     @staticmethod
     def get_flag(df, flag):
-        """
-        Get each line's flag of lp or st.
-        :param df: pd.DataFrame.
-        :param flag: str, lp or st.
-        :return: pd.Series. Validation of each line.
+        """ 获取lp或st标志位。
+
+        :param df: pd.DataFrame. 数据表。
+        :param flag: str, lp or st. 标志类型。
+        :return: pd.Series. 有效标志位列表。
         """
         if 'flag' not in df.columns:
             return pd.Series(data=False, index=df.index, name='flag')
@@ -503,12 +483,12 @@ class Power:
         return df['flag'] & bit > 0
 
     def drop_data(self, fmt, flag, etypes=None):
-        """
-        Drop lp or st data.
+        """ 删除lp或st的相关数据。
 
-        :param etypes: [str] or None. Equipment type.
-        :param fmt: str.
-        :param flag: str, lp or st.
+        :param etypes: [str]. 设备类型列表。
+                       or None. 所有设备。
+        :param fmt: str. 格式模板。
+        :param flag: str, lp or st. 标志类型。
         """
         if not etypes:
             etypes = self.data.keys()
@@ -529,7 +509,7 @@ class Power:
 
     def describe(self):
         """
-        Describe lf, lp, st record amounts for each etype.
+        统计lf、lp和st的有效记录数据。
         """
         for name, df in self.data.items():
             n_lf = df.shape[0]
@@ -539,26 +519,26 @@ class Power:
 
     def load_power(self, path, fmt='on', lf=True, lp=True, st=True,
                    station=True, shorten=True):
-        """
-        Load power from data directory.
+        """ 加载数据目录。
 
-        :param path: str.
-        :param fmt: str.
-        :param lf: bool. Whether load lf files.
-        :param lp: bool. Whether load lp files.
-        :param st: bool. Whether load st files.
-        :param station: bool. Whether load station infos.
-        :param shorten: bool. Use shorten storage.
+        :param path: str. 数据目录。
+        :param fmt: str. 格式模板。
+        :param lf: bool. 是否加载lf文件。
+        :param lp: bool. 是否加载lp文件。
+        :param st: bool. 是否加载st文件。
+        :param station: bool. 是否生成厂站信息。
+        :param shorten: bool. 采用短格式，用于节省内存开销。
         """
         if lf:
             self.data['bus'] = self.load_lf(path + '/LF.L1', fmt)
+            self.data['bus']['vl'] = get_vl_from_vbase(self.data['bus']['vbase'])
             self.data['acline'] = self.load_lf(path + '/LF.L2', fmt)
             self.data['transformer'] = self.load_lf(path + '/LF.L3', fmt)
             self.data['generator'] = self.load_lf(path + '/LF.L5', fmt)
             self.data['load'] = self.load_lf(path + '/LF.L6', fmt)
             self.data.update(self.load_mlf(path + '/LF.NL4', fmt=fmt))
             self.data.update(self.load_mlf(path + '/LF.ML4', fmt=fmt, header_char='#'))
-            if self.data.get('dcbus', None):
+            if 'dcbus' in self.data:
                 self.data['dcbus']['name'] =\
                     self.data['bus'].loc[self.data['dcbus']['bus'], 'name']
         if lp:
@@ -592,11 +572,10 @@ class Power:
         # self.describe()
 
     def shorten_storage(self, etypes=None, fmt='on'):
-        """
-        Shorten the storage format, int32 for integer, float32 for float.
+        """ 采用短格式存储，整数型采用int32，浮点型采用float32。
 
-        :param etypes: str.
-        :param fmt: str.
+        :param etypes: str. 设备类型。
+        :param fmt: str. 格式模板。
         """
         if not etypes:
             etypes = self.data.keys()
@@ -617,10 +596,9 @@ class Power:
                 self.data[e][columns] = self.data[e][columns].astype('float32')
 
     def generate_mdc_version_outline(self, fmt='on'):
-        """
-        Generate mdc version and outline infos.
+        """ 生成mdc的version和outline信息。
 
-        :param fmt: str.
+        :param fmt: str. 格式模板。
         """
         self.data['version'] = pd.DataFrame([get_format_version('mdc')],
                                             columns=['version'])
@@ -652,16 +630,16 @@ class Power:
 
     def generate_island_info(self):
         """
-        Generate island info.
+        生成分岛信息。
         """
         graph = PowerGraph(self, graph_type='multi', node_type='bus')
         islands = graph.get_islands(10)
         self.data['bus']['island'] = islands
 
     def get_largest_island(self):
-        """
-        Get the largest island.
-        :return: int. No. of the largest island.
+        """ 获取母线数量最多的电气岛。
+
+        :return: int. 最大岛的岛号。
         """
         if 'island' not in self.data['bus'].columns:
             self.generate_island_info()
@@ -672,7 +650,7 @@ class Power:
 
     def generate_station_info(self):
         """
-        Generate station info.
+        生成厂站信息。
         """
         if 'island' not in self.data['bus'].columns:
             self.generate_island_info()
@@ -686,6 +664,8 @@ class Power:
         name_idx = pd.DataFrame(data=range(self.stations.shape[0]),
                                 index=self.stations.name)
         self.data['bus']['st_no'] = name_idx.loc[names].values
+        self.stations['vl'] = self.data['bus'].groupby('st_no', sort=False)\
+            .agg({'vl':'max'})
         self.data['acline']['st_i'] = \
             self.data['bus'].loc[self.data['acline'].ibus, 'st_no'].values
         self.data['acline']['st_j'] = \
@@ -698,15 +678,14 @@ class Power:
             self.data['bus'].loc[self.data['load'].bus, 'st_no'].values
 
     def save_power(self, path, fmt='on', lf=True, lp=True, st=True, miss='fill'):
-        """
-        Save power to power directory.
+        """ 保存数据目录。
 
-        :param path: str.
-        :param fmt: str.
-        :param lf: bool. Whether save lf files.
-        :param lp: bool. Whether save lp files.
-        :param st: bool. Whether save st files.
-        :param miss: str, fill or raise.
+        :param path: str. 数据目录。
+        :param fmt: str. 格式模板。
+        :param lf: bool. 是否保存lf文件。
+        :param lp: bool. 是否保存lp文件。
+        :param st: bool. 是否保存st文件。
+        :param miss: str, fill or raise. 缺失列处理方式。
         """
         if fmt != self.fmt:
             print("Format mismatch: load is %s, save is %s" % (self.fmt, fmt))
@@ -748,10 +727,9 @@ class Power:
 
     @staticmethod
     def statistic_acline(aclines):
-        """
-        Statistic acline.
+        """ 统计交流线表数据。
 
-        :param aclines: pd.DataFrame.
+        :param aclines: pd.DataFrame. 交流线表。
         """
         valid_on = aclines['mark'] > 0
         valid_pc = aclines['ibus'] == aclines['jbus']

@@ -7,6 +7,7 @@
 import numpy as np
 import pandas as pd
 import warnings
+import os
 
 from common.time_util import timer
 
@@ -18,8 +19,19 @@ EPS = 1e-8
 
 def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
                       on_only=True, ignore_ground_branch=True, x_only=True):
+    """ 从Power实例生成导纳阵Y。
+
+    :param power: Power. 读取LF文件后的Power实例。
+    :param island: int. 电气岛号。
+    :param node_type: str. 'bus'表示以母线为单元，'station'表示以厂站为单元。
+    :param dtype: dtype. 形成矩阵时的浮点数类型，默认为float32.
+    :param on_only: bool. 只考虑投运支路。
+    :param ignore_ground_branch: bool. 忽略容抗器支路。
+    :param x_only: bool. 只考虑电抗，忽略电阻。
+    :return: pd.DataFrame. Y矩阵。
+    """
     if node_type == 'bus':
-        if 'island' not in power.buses.columns:
+        if 'island' not in power.data['bus'].columns:
             raise ValueError("Island info not generated.")
         nodes = power.data['bus'].index[power.data['bus'].island == island].values
         columns = ['mark', 'ibus', 'jbus', 'r', 'x']
@@ -66,12 +78,17 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
         # y[i, j] = -(g+jb) in non-diagonal element
     for i in range(y.shape[0]):
         y[i, i] = 0.0
-        y[i, i] = -np.sum(y[i, ]) * 1.01
+        y[i, i] = -np.sum(y[i,]) * 1.01
     # y[0][0] = y[0][0] * 1.01
     return pd.DataFrame(data=y, index=nodes, columns=nodes)
 
 
 def calc_z_from_y(y):
+    """ 通过Y矩阵求逆得到Z矩阵。
+
+    :param y: pd.DataFrame or np.array. Y矩阵。
+    :return: pd.DataFrame or np.array. Z矩阵。
+    """
     if not isinstance(y, pd.DataFrame) and not isinstance(y, np.array):
         raise NotImplementedError("%s not supported." % type(y))
     if y.shape[0] > 1000:
@@ -83,6 +100,15 @@ def calc_z_from_y(y):
 
 
 def calc_ed_from_z(z, indices=None):
+    """ 从Z矩阵求取电气距离。
+
+    :param z: pd.DataFrame. Z矩阵。
+    :param indices: 1D list. 厂站列表；
+                    or 2D list. 厂站对列表；
+                    or None. 导出全部厂站。
+    :return: pd.DataFrame. 当indices为1D list或None时；
+             np.array. 当indices为2D list时。
+    """
     if indices is None:
         nodes = z.index.to_list()
         zz = z.values
@@ -115,6 +141,21 @@ def calc_ed_from_z(z, indices=None):
 def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
                        on_only=True, ignore_ground_branch=True, x_only=True,
                        indices=None):
+    """ 从Power实例求取电气距离。。
+
+    :param power: Power. 读取LF文件后的Power实例。
+    :param island: int. 电气岛号。
+    :param node_type: str. 'bus'表示以母线为单元，'station'表示以厂站为单元。
+    :param dtype: dtype. 形成矩阵时的浮点数类型，默认为float32.
+    :param on_only: bool. 只考虑投运支路。
+    :param ignore_ground_branch: bool. 忽略容抗器支路。
+    :param x_only: bool. 只考虑电抗，忽略电阻。
+    :param indices: 1D list. 厂站列表；
+                    or 2D list. 厂站对列表；
+                    or None. 导出全部厂站。
+    :return: pd.DataFrame. 当indices为1D list或None时；
+             np.array. 当indices为2D list时。
+    """
     y = generate_y_matrix(power, island, node_type=node_type, dtype=dtype,
                           on_only=on_only, ignore_ground_branch=ignore_ground_branch,
                           x_only=x_only)
@@ -123,6 +164,13 @@ def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
 
 
 def ed_map_tsne(ed, n_dim=2, **kwargs):
+    """ 通过t-SNE算法对电气距离关系进行降维。
+
+    :param ed: pd.DataFrame. 电气距离矩阵。
+    :param n_dim: int. 降维后维度。
+    :param kwargs: 其他参数。
+    :return: np.array. 降维后坐标。
+    """
     assert isinstance(ed, pd.DataFrame) and ed.shape[0] == ed.shape[1]
     tsne = TSNE(n_components=n_dim, metric='precomputed', **kwargs)
     x = tsne.fit_transform(ed.values)
@@ -131,6 +179,12 @@ def ed_map_tsne(ed, n_dim=2, **kwargs):
 
 
 def group_kmeans(ed, n):
+    """ 基于电气距离关系，通过kmeans法来进行分组。
+
+    :param ed: pd.DataFrame. 电气距离矩阵。
+    :param n: int. 分组数。
+    :return: dict. 分组列表字典。
+    """
     assert isinstance(ed, pd.DataFrame) and ed.shape[0] == ed.shape[1]
     kmeans = KMeans(n_clusters=n)
     clf = kmeans.fit(ed.values)
@@ -140,23 +194,66 @@ def group_kmeans(ed, n):
     return groups
 
 
+def load_n1_ed(path):
+    """ 从path/n1_*获取全接线下N-1后的电气距离矩阵
+
+    :param path: std. 数据目录，包含所有 n1_*.txt 文件，每个文件记录一个交流线开断后，全网主要厂站间的电气距离；
+                              包含 idx_name.txt 文件，记录厂站名及索引号。
+    :return: pd.DataFrame. 电气距离矩阵，Index为"i侧厂站名_j侧厂站名"
+    """
+    subs = []
+    files = os.listdir(path)
+    for i, file_name in enumerate(files):
+        if i % 10 == 0:
+            print("%d / %d" % (i, len(files)))
+        if not file_name.startswith('n1_'):
+            continue
+        sub = pd.read_table(os.path.join(path, file_name),
+                            sep=' ', encoding='gbk', index_col=[0])
+        subs.append(sub)
+    df = pd.concat(subs, axis=1)
+    st_names = pd.read_table(os.path.join(path, 'idx_name.txt'),
+                             sep=' ', encoding='gbk', index_col=[0])
+    new_idx = []
+    for idx in df.index:
+        i, j = int(idx.split('_')[0]), int(idx.split('_')[1])
+        new_idx.append('_'.join([st_names['name'][i], st_names['name'][j]]))
+    df.index = new_idx
+    df = df[(df < 10.).all(axis=1)]
+    np.savez(os.path.join(path, 'n1_ed.npz'), index=df.index,
+             columns=df.columns, datas=df.values)
+    return df
+
+
+def minset_greedy(df, thr=0.05):
+    """ 采用贪婪算法，获取可以分辨所有N-1情况的电气距离最小子集。
+
+    :param df: pd.DataFrame. 电气距离矩阵。
+    :param thr: float. 分辨率阈值。
+    :return: Index. 所需电气距离索引列表。
+    """
+    ret = []
+    delta = df.values
+    delta = np.abs(delta - delta[:, 0:1]) / (delta + 1e-8)  # 第0列为全连接状态下的电气距离
+    delta = (delta[:, 1:] > thr)
+    covered = np.zeros((delta.shape[1],), dtype=np.bool_)
+    while True:
+        remain_sum = np.sum(delta[:, ~covered], axis=1)
+        i = remain_sum.argmax()
+        if remain_sum[i] == 0:
+            break
+        # print(df.index[i], np.sum(delta[i,~covered]), np.sum(covered))
+        ret.append(i)
+        covered += delta[i, :]
+    return df.index[ret]
+
+
 if __name__ == '__main__':
     from core.power import Power
 
-    path = 'D:/PSA_src/psa/localdata/0913/data'
-    fmt = 'on'
+    path = 'dataset/wepri36'
+    fmt = 'off'
     power = Power(fmt)
     power.load_power(path, fmt=fmt, lp=False, st=False)
+    ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
 
-    island = 0
-    with timer('Generate Y matrix'):
-        y = generate_y_matrix(power, island, node_type='station', x_only=False)
-    with timer('Calculate Z from Y'):
-        z = calc_z_from_y(y)
-    with timer('Calculate ED matrix'):
-        indices = power.stations.index[power.stations.island == island][:100].to_numpy()
-        ed = calc_ed_from_z(z, indices=indices)
-    # with timer('ED map to 2D by t-SNE'):
-    #     x = ed_map_tsne(ed)
-    # with timer('Group by kmeans'):
-    #     groups = group_kmeans(ed, 10)

@@ -136,3 +136,32 @@ def set_gl_p0(data, value, keep_factor=True, clip=True):
     if clip:
         data['p0'] = np.clip(data['p0'], data['pmin'], data['pmax'])
         data['q0'] = np.clip(data['q0'], data['qmin'], data['qmax'])
+
+
+def full_open_generators(generators, indices, v0=None):
+    """ 开机并满发。
+
+    :param generators: pd.DataFrame. 机组数据表。
+    :param indices: list. 指定机组的索引列表；
+    :param v0: float or [float]. 设置电压初值；
+               or None. 不修改电压初值。
+    """
+    pass
+
+
+def close_all_branches(data):
+    """ 闭合所有交流线和变压器支路。
+
+    :param data: dict of pd.DataFrame. 数据集合。
+    """
+    pass
+
+
+def random_open_acline(aclines, num, keep_link=True):
+    """ 随机开断一定数量的交流线。
+
+    :param aclines: pd.DataFrame. 交流线数据表。
+    :param num: int. 开断数量。
+    :param keep_link: bool. 是否保持连接状态，即不增加分岛。
+    """
+    pass

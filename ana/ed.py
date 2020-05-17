@@ -73,10 +73,10 @@ def minset_greedy(df, thr=0.05):
     delta = np.abs(delta - delta[:,0:1]) / (delta + 1e-8)
     delta = (delta[:, 1:] > thr)
     covered = np.zeros((delta.shape[1],), dtype = np.bool_)
-    while(True):
+    while True:
         remain_sum = np.sum(delta[:, ~covered], axis = 1)
         i = remain_sum.argmax()
-        if(remain_sum[i] == 0):
+        if remain_sum[i] == 0:
             break
         # print(df.index[i], np.sum(delta[i,~covered]), np.sum(covered))
         ret.append(i)
