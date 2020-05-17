@@ -10,7 +10,7 @@ import numpy as np
 import glob2
 from io import StringIO
 
-from core.power import Power
+from core.power import Power, get_vl_from_vbase
 from core.power_def import format_key, file_format, \
     model_column, restore_column, \
     index_dict, name_index_dict, get_all_column
@@ -114,6 +114,7 @@ def unpack_data(path, file_name, fmt='on', types=None, models=None, dirs=None):
             if t in indices:
                 power.data[t].set_index(indices[t], drop=False, inplace=True)
                 power.data[t].sort_index(inplace=True)
+        power.data['bus']['vl'] = get_vl_from_vbase(power.data['bus']['vbase'])
         power.generate_mdc_version_outline()
         power.save_power(os.path.join(path, d), fmt=fmt)
 
