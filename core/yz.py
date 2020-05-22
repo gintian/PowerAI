@@ -18,7 +18,8 @@ EPS = 1e-8
 
 
 def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
-                      on_only=True, ignore_ground_branch=True, x_only=True):
+                      on_only=True, ignore_ground_branch=True, x_only=True,
+                      ignore_nodes=None, diag_coef=1.01):
     """ 从Power实例生成导纳阵Y。
 
     :param power: Power. 读取LF文件后的Power实例。
@@ -28,19 +29,21 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
     :param on_only: bool. 只考虑投运支路。
     :param ignore_ground_branch: bool. 忽略容抗器支路。
     :param x_only: bool. 只考虑电抗，忽略电阻。
+    :param ignore_nodes: list. 忽略节点的索引，例如平衡节点。
+    :param diag_coef: float. 对角线系数，避免矩阵不可逆。
     :return: pd.DataFrame. Y矩阵。
     """
     if node_type == 'bus':
         if 'island' not in power.data['bus'].columns:
             raise ValueError("Island info not generated.")
-        nodes = power.data['bus'].index[power.data['bus'].island == island].values
+        nodes = power.data['bus'].index[power.data['bus'].island == island].to_list()
         columns = ['mark', 'ibus', 'jbus', 'r', 'x']
         branches = np.vstack((power.data['acline'][columns].values,
                               power.data['transformer'][columns].values)).astype(dtype)
     elif node_type == 'station':
         if 'island' not in power.stations.columns:
             raise ValueError("Island info not generated.")
-        nodes = power.stations.index[power.stations.island == island].values
+        nodes = power.stations.index[power.stations.island == island].to_list()
         columns = ['mark', 'st_i', 'st_j', 'r', 'x']
         branches = power.data['acline'][columns].values.astype(dtype)
     else:
@@ -78,9 +81,13 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
         # y[i, j] = -(g+jb) in non-diagonal element
     for i in range(y.shape[0]):
         y[i, i] = 0.0
-        y[i, i] = -np.sum(y[i,]) * 1.01
-    # y[0][0] = y[0][0] * 1.01
-    return pd.DataFrame(data=y, index=nodes, columns=nodes)
+        y[i, i] = -np.sum(y[i,]) * diag_coef
+    # y[0][0] = y[0][0] * diag_coef
+    y = pd.DataFrame(data=y, index=nodes, columns=nodes)
+    if ignore_nodes:
+        nodes = [n for n in nodes if n not in ignore_nodes]
+        y = y.loc[nodes, nodes]
+    return y
 
 
 def calc_z_from_y(y):
@@ -106,8 +113,8 @@ def calc_ed_from_z(z, indices=None):
     :param indices: 1D list. 厂站列表；
                     or 2D list. 厂站对列表；
                     or None. 导出全部厂站。
-    :return: pd.DataFrame. 当indices为1D list或None时；
-             np.array. 当indices为2D list时。
+    :return: pd.DataFrame. 当indices为1D list或None时，返回DataFrame。
+             np.array. 当indices为2D list时，返回列向量。
     """
     if indices is None:
         nodes = z.index.to_list()
@@ -153,8 +160,8 @@ def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
     :param indices: 1D list. 厂站列表；
                     or 2D list. 厂站对列表；
                     or None. 导出全部厂站。
-    :return: pd.DataFrame. 当indices为1D list或None时；
-             np.array. 当indices为2D list时。
+    :return: pd.DataFrame. 当indices为1D list或None时，返回DataFrame。
+             np.array. 当indices为2D list时，返回列向量。
     """
     y = generate_y_matrix(power, island, node_type=node_type, dtype=dtype,
                           on_only=on_only, ignore_ground_branch=ignore_ground_branch,
@@ -248,12 +255,78 @@ def minset_greedy(df, thr=0.05):
     return df.index[ret]
 
 
+def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
+    """
+
+    :param power: Power. Power数据示例。
+    :param island: int. 岛号。
+    :param branches: dict. {'acline': [index...], 'transformer': [index...]}
+    :param alpha: str. 'single'表示平衡机独立承担，函数退化为常规的GSDF。
+    :param node_type: str. 'bus'表示以母线为单元建模，'station'表示以厂站为单元建模。
+    :return: pd.DataFrame. 灵敏度矩阵，每行代表一个支路，每列代表一个机组（含平衡机）。
+    """
+    generators = power.data['generator']
+    slack = generators[generators['type'] == 0]['bus']
+    slack = power.data['bus'].loc[slack]
+    slack = slack[slack['island'] == island].index[0]
+    gens = generators[generators['mark'] == 1]['bus']
+    gens = power.data['bus'].loc[gens]
+    gens = gens[gens['island'] == island].index.to_list()
+    if node_type == 'station':
+        slack = power.data['bus'].loc[slack, 'st_no']
+        gens = power.data['bus'].loc[gens, 'st_no'].drop_duplicates().values.tolist()
+    gens.remove(slack)
+    y = generate_y_matrix(power, island, node_type=node_type,
+                          ignore_nodes=[slack], diag_coef=1.0)
+    x = calc_z_from_y(y)
+
+    def gk_one_line(x_, i_, j_, slack_):
+        if i_ == slack_:
+            return -x_.loc[j_]
+        elif j_ == slack_:
+            return x_.loc[i_]
+        else:
+            return x_.loc[i_] - x_.loc[j_]
+
+    # n_branch = len(branches.get('acline', [])) + len(branches.get('transformer', []))
+    indices = branches.get('acline', []) + branches.get('transformer', [])
+    gk = np.zeros((len(indices), y.shape[1]), dtype=np.float32)
+    columns = ['st_i', 'st_j', 'x'] if node_type == 'station' else ['ibus', 'jbus', 'x']
+    ii = 0
+    for ii, idx in enumerate(branches.get('acline', [])):
+        i, j, xk = power.data['acline'].loc[idx, columns]
+        if i == j:
+            print('acline[' + idx + '] has the same i / j', i, j)
+        else:
+            gk[ii, :] = gk_one_line(x, i, j, slack) / xk
+    columns = ['ibus', 'jbus', 'x']
+    for ii, idx in enumerate(branches.get('transformer', []), ii):
+        if node_type == 'station':
+            print('Transformer is ignored in station mode.')
+            break;
+        i, j, xk, tk = power.data['transformer'].loc[idx, columns]
+        gk[ii, :] = gk_one_line(x, i, j, slack) / xk
+    gk = pd.DataFrame(gk, index=indices, columns=x.columns)[gens]
+    gk[slack] = 0.
+
+    if alpha == 'single':
+        alpha = pd.Series(0., index=gk.columns, dtype=np.float32)
+        alpha.loc[slack] = 1.
+    else:
+        raise NotImplementedError
+    n_gen = len(gk.columns)
+    fu = np.eye(n_gen) - np.dot(alpha.values[:, np.newaxis], np.ones((1, n_gen)))
+    gkr = np.dot(gk, fu)
+    gkr = pd.DataFrame(gkr, index=gk.index, columns=gk.columns)
+    return gkr
+
+
 if __name__ == '__main__':
     from core.power import Power
 
-    path = 'dataset/wepri36'
+    path = '../dataset/wepri36'
     fmt = 'off'
     power = Power(fmt)
     power.load_power(path, fmt=fmt, lp=False, st=False)
-    ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
-
+    # ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
+    gkr = calc_gsdf(power, 0, {'acline':[29, 44]})

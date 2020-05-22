@@ -14,6 +14,7 @@ from tensorflow.keras.models import Model
 import tensorflow_probability as tfp
 
 from core.action import distribute_generators_p
+from model.env import OpEnv
 
 EP_TRAIN = 10  # total number of episodes for training
 EP_TEST = 10
@@ -36,6 +37,10 @@ PPO2_CLIP = 0.2
 
 class TrendPPO(object):
     def __init__(self, work_path):
+        """ 初始化。
+
+        :param work_path: str. 工作目录，存储PPO执行过程中的文件。
+        """
         self.work_path = work_path
         self.state = Input(shape=(STATE_DIM,), dtype='float32', name='state')
         self.adv = Input(shape=(1,), dtype='float32', name='adv')
@@ -47,10 +52,12 @@ class TrendPPO(object):
                                        mu_ratio=GENERATOR_CLIP, sigma_ratio=0.1)
         self.actor_g_old = self.mlp_normal(self.state, [64, 32, G_OUT_DIM], 'actor_g_old',
                                            mu_ratio=GENERATOR_CLIP, sigma_ratio=0.1)
+        # G/D网络输入为state，输出为G/D的动作量
         x = layers.Dense(64, activation='relu', dtype='float32')(self.state)
         x = layers.Dense(32, activation='relu')(x)
         critic = layers.Dense(1, activation=None)(x)
         self.critic = Model(self.state, critic, name='critic')
+        # critic网络输入为state，输出为v_s。
         self.actor_d_opt = tf.optimizers.Adam(AD_LR)
         self.actor_g_opt = tf.optimizers.Adam(AG_LR)
         self.critic_opt = tf.optimizers.Adam(C_LR)
@@ -59,6 +66,18 @@ class TrendPPO(object):
     def mlp_normal(inputs, shape, name, activation='relu',
                    mu_activation='tanh', mu_ratio=0.1,
                    sigma_activation='sigmoid', sigma_ratio=0.1):
+        """ 多层感知机网络，输出正态分布的mu和sigma。
+
+        :param inputs: Input. 输入量。
+        :param shape: list[int]. 网络每层神经元数量。
+        :param name: str. 网络名称。
+        :param activation: str. 中间层激活函数。
+        :param mu_activation: str. mu的激活函数。
+        :param mu_ratio: float. mu的变化比例范围。
+        :param sigma_activation: str. sigma的激活函数。
+        :param sigma_ratio: float. sigma的变化比例范围。
+        :return: Model. 从inputs到[mu, sigma]的网络模型。
+        """
         x = inputs
         for i in range(len(shape) - 1):
             x = layers.Dense(shape[i], activation=activation, dtype='float32')(x)
@@ -70,6 +89,14 @@ class TrendPPO(object):
         return model
 
     def actor_train(self, state, act, adv, name):
+        """ actor模型训练函数，G/D网络输入为state，输出为G/D的动作量。
+        根据优势量adv调整G动作量或D动作量出现的概率，G目标是增加adv，D目标是减小adv。
+
+        :param state: np.array. 电网状态输入量。
+        :param act: np.array. 动作量。
+        :param adv: np.array. 优势量。adv = r + GAMMA * v_{s+1} - v_s
+        :param name str. 'g'表示训练G网络，'d'表示训练D网络。
+        """
         if name == 'g':
             actor = self.actor_g
             actor_old = self.actor_g_old
@@ -85,23 +112,31 @@ class TrendPPO(object):
             pi_old = tfp.distributions.Normal(mu_old, sigma_old)
             ratio = pi.prob(act) / (pi_old.prob(act) + EPS)
             clipped_ratio = tf.clip_by_value(ratio, 1. - PPO2_CLIP, 1. + PPO2_CLIP)
-            # TODO: d net loss? maybe maximum?
             if name == 'g':
                 loss = -tf.reduce_mean(tf.minimum(ratio * adv, clipped_ratio * adv))
+                # ‘-’代表G网络最大化 adv，同时需要抑制adv不能太大
             else:
-                loss = tf.reduce_mean(tf.minimum(ratio * adv, clipped_ratio * adv))
-        grad = tape.gradient(loss, actor.trainable_weights)  # maximize adv for g
-        actor_opt.apply_gradients(zip(grad, actor.trainable_weights))
+                loss = tf.reduce_mean(tf.maximum(ratio * adv, clipped_ratio * adv))
+                # '+'代表D网络最小化 adv，同时需要抑制adv不能太小
+        grad = tape.gradient(loss, actor.trainable_weights)
+        actor_opt.apply_gradients(zip(grad, actor.trainable_weights))   # 梯度下降
 
     def update_old_d(self):
+        """ 把D网络参数更新至D_old中。 """
         for w, w0 in zip(self.actor_d.trainable_weights, self.actor_d_old.trainable_weights):
             w0.assign(w)
 
     def update_old_g(self):
+        """ 把G网络参数更新至G_old中。 """
         for w, w0 in zip(self.actor_g.trainable_weights, self.actor_g_old.trainable_weights):
             w0.assign(w)
 
     def critic_train(self, state, q):
+        """ critic模型训练函数，输入为state，输出为v_s。
+
+        :param state: np.array. 输入状态量。
+        :param q: np.array. q = r + GAMMA * v_{s+1}
+        """
         with tf.GradientTape() as tape:
             adv = q - self.critic(state)
             loss = tf.reduce_mean(tf.square(adv))
@@ -109,13 +144,19 @@ class TrendPPO(object):
         self.critic_opt.apply_gradients(zip(grad, self.critic.trainable_weights))
 
     def cal_adv(self, state, q):
+        """ 计算adv，adv = r + GAMMA * v_{s+1} - v_s = q - v_s
+
+        :param state: np.array. 输入状态量。
+        :param q: np.array. Q值。
+        :return: np.array. adv优势量。
+        """
         adv = q - self.critic(state)
         return adv.numpy()
 
     def update(self, state_d, state_g, act_d, act_g, q):
         self.update_old_d()
         self.update_old_g()
-        adv = self.cal_adv(state_d, q)
+        adv = self.cal_adv(state_d, q) # TODO: 为什么用state_d？
         # adv = (adv - adv.mean())/(adv.std()+1e-6)  # sometimes helpful
         for _ in range(A_UPDATE_STEPS):
             self.actor_train(state_d, act_d, adv, name='d')
@@ -204,12 +245,8 @@ if __name__ == '__main__':
     parser.add_argument('--test', dest='train', action='store_false')
     args = parser.parse_args()
 
-    if os.name == 'nt':
-        base_path = 'D:/PSASP_Pro/wepri36/wepri36'
-        work_path = 'D:/PSASP_Pro/wepri36'
-    else:
-        base_path = '/home/sdy/data/wepri36/wepri36'
-        work_path = '/home/sdy/data/wepri36'
+    base_path = os.path.join(os.path.expanduser('~'), 'wepri36', 'wepri36')
+    work_path = os.path.join(os.path.expanduser('~'), 'wepri36')
     inputs = {'generator': ['p0'],
               'load': ['p0', 'q0']}
     env = OpEnv(base_path, work_path, inputs, fmt='off')

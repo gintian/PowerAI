@@ -5,6 +5,10 @@
 """
 
 import numpy as np
+import random
+
+from core.power import Power
+from core.topo import PowerGraph
 
 EPS = 1e-8
 
@@ -146,7 +150,10 @@ def full_open_generators(generators, indices, v0=None):
     :param v0: float or [float]. 设置电压初值；
                or None. 不修改电压初值。
     """
-    pass
+    generators.loc[indices, 'mark'] = 1
+    generators.loc[indices, 'p0'] = generators.loc[indices, 'pmax']
+    if v0 is not None:
+        generators.loc[indices, 'v0'] = v0
 
 
 def close_all_branches(data):
@@ -154,14 +161,42 @@ def close_all_branches(data):
 
     :param data: dict of pd.DataFrame. 数据集合。
     """
-    pass
+    data['acline']['mark'] = 1
+    data['transformer']['mark'] = 1
 
 
-def random_open_acline(aclines, num, keep_link=True):
+def random_open_acline(power, num, keep_link=True):
     """ 随机开断一定数量的交流线。
 
-    :param aclines: pd.DataFrame. 交流线数据表。
+    :param power: Power. Power实例，需要检查连通性。
     :param num: int. 开断数量。
     :param keep_link: bool. 是否保持连接状态，即不增加分岛。
+    :return list[index]. 开断线路的索引列表。
     """
-    pass
+    ret = []
+    aclines = power.data['acline']
+    indices = aclines[(aclines['mark'] == 1) & (aclines['ibus'] != aclines['jbus'])].index
+    if keep_link:
+        graph = PowerGraph(power, graph_type='multi', node_type='bus', on_only=True)
+    while num > 0:
+        if len(indices) < num:
+            raise ValueError('Not plenty of aclines to be off.')
+        idx = indices[random.sample(range(len(indices)), 1)[0]]
+        indices = indices.drop(idx)
+        if keep_link:
+            edge = (aclines.loc[idx, 'ibus'], aclines.loc[idx, 'jbus'], idx)
+            if graph.is_connected(edge[0], edge[1], [edge]):
+                continue
+            graph.G.remove_edge(*edge)
+        aclines.loc[idx, 'mark'] = 0
+        ret.append(idx)
+        num = num - 1
+    return ret
+
+
+if __name__ == '__main__':
+    path = '../dataset/wepri36'
+    fmt = 'off'
+    power = Power(fmt)
+    power.load_power(path, fmt=fmt, lp=False, st=False, station=True)
+    random_open_acline(power, 2)

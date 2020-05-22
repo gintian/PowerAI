@@ -52,15 +52,15 @@ class PowerGraph:
         values = values[values[:, 0] != values[:, 1]].astype(np.float)
         if on_only:
             values = values[values[:, 3] == 1.]
-        values[:, :2] = np.vstack((values[:,:2].min(axis=1),
-                                   values[:,:2].max(axis=1))).T
+        values[:, :2] = np.vstack((values[:, :2].min(axis=1),
+                                   values[:, :2].max(axis=1))).T
         branches = pd.DataFrame(data=values, columns=['i', 'j', 'x', 'mark'])
         branches['x'] = 1. / branches['x']
         branches[['i', 'j', 'mark']] = branches[['i', 'j', 'mark']].astype(int, copy=False)
-        groups = branches.groupby(['i', 'j'], sort=False)\
+        groups = branches.groupby(['i', 'j'], sort=False) \
             .agg({'x': 'sum', 'mark': 'count'})
         for t in groups.itertuples():
-            g.add_edge(t[0][0], t[0][1], weight=1./t[1], amount=t[2])
+            g.add_edge(t[0][0], t[0][1], weight=1. / t[1], amount=t[2])
         return g
 
     @staticmethod
@@ -71,22 +71,22 @@ class PowerGraph:
             for t in power.data['bus']['name'].items():
                 g.add_node(t[0], name=t[1])
             columns = ['ibus', 'jbus', 'mark', 'name'] + prop_columns
-            values = np.vstack((power.data['acline'][columns].values,
-                                power.data['transformer'][columns].values))
+            values = pd.concat([power.data['acline'][columns],
+                                power.data['transformer'][columns]])
         elif node_type == 'station':
             for t in power.stations['name'].items():
                 g.add_node(t[0], name=t[1])
             columns = ['st_i', 'st_j', 'mark', 'name'] + prop_columns
-            values = power.data['acline'][columns].values
+            values = power.data['acline'][columns]
         else:
             return None
         if len(values) == 0:
             return g
-        values = values[values[:, 0] != values[:, 1]]
+        values = values[values.iloc[:, 0] != values.iloc[:, 1]]
         if on_only:
-            values = values[values[:, 2] == 1]
-        for v in values:
-            g.add_edge(v[0], v[1], **dict(zip(columns[3:], v[3:])))
+            values = values[values.iloc[:, 2] == 1]
+        for v in values.itertuples():
+            g.add_edge(v[1], v[2], v[0], **dict(zip(columns[3:], v[4:])))
         return g
 
     def get_islands(self, min_num=0):
@@ -103,24 +103,40 @@ class PowerGraph:
     def get_bridges(self):
         res = []
         if self.G.is_multigraph():
-            raise NotImplementedError("Multi Graph not supported.")
+            for edge in self.G.edges:
+                if self.is_connected(edge[0], edge[1], off_edges=[edge]):
+                    res.append(edge)
+            # raise NotImplementedError("Multi Graph not supported.")
         else:
             for b in nx.bridges(self.G):
                 if self.G.edges[b].get('amount', 0) == 1:
                     res.append(b)
         return res
 
+    def is_connected(self, u, v, off_edges=None):
+        data = {}
+        if off_edges:
+            for edge in off_edges:
+                if edge not in self.G.edges:
+                    raise ValueError('edge (', edge, ') not in graph.')
+                data[edge] = self.G.edges[edge]
+                self.G.remove_edge(*edge)
+        ret = v in nx.algorithms.components.node_connected_component(self.G, u)
+        for edge, value in data.items():
+            self.G.add_edge(*edge, **value)
+        return ret
+
 
 if __name__ == '__main__':
     from core.power import Power
-    path = 'D:/PSA_src/psa/localdata/0913/data'
+
+    path = 'C:\\Users\\sdy\\data\\db\\SA_2'
     fmt = 'on'
     power = Power(fmt)
     power.load_power(path, fmt=fmt, lp=False, st=False)
     with timer("graph"):
-        graph1 = PowerGraph(power, graph_type='single', node_type='station',
-                            on_only=True)
-        islands1 = graph1.get_islands(5)
-        graph2 = PowerGraph(power, graph_type='multi', node_type='bus',
-                            on_only=False, edge_columns=['x'])
-        islands2 = graph2.get_islands(10)
+        graph = PowerGraph(power, graph_type='multi', node_type='bus', on_only=True)
+        graph.is_connected(3452, 824, [(446, 606, 10546),
+                                       (446, 606, 10547),
+                                       (3452, 824, 51186),
+                                       (3453, 825, 51189)])

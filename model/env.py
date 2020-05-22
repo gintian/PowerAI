@@ -152,8 +152,8 @@ class OpEnv(object):
         values = values[values > 0.]
         if len(values) == 0 or np.min(values) < 0.1:
             return ST_UNSTABLE_REWARD, True, results
-        # thrs = [0.3, 0.5]
-        thrs = [1.0]
+        thrs = [0.3, 0.5]
+        # thrs = [1.0]
         for thr in thrs:
             values_lt = values[values < thr]
             if len(values_lt) > 0:

@@ -9,7 +9,7 @@ from core.yz import calc_ed_from_power
 
 
 def test_calc_ed():
-    path = 'dataset/wepri36'
+    path = '../dataset/wepri36'
     fmt = 'off'
     power = Power(fmt)
     power.load_power(path, fmt=fmt, lp=False, st=False)
