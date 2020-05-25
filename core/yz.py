@@ -299,8 +299,8 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
             print('acline[' + idx + '] has the same i / j', i, j)
         else:
             gk[ii, :] = gk_one_line(x, i, j, slack) / xk
-    columns = ['ibus', 'jbus', 'x']
-    for ii, idx in enumerate(branches.get('transformer', []), ii):
+    columns = ['ibus', 'jbus', 'x', 'tk']
+    for ii, idx in enumerate(branches.get('transformer', []), ii+1):
         if node_type == 'station':
             print('Transformer is ignored in station mode.')
             break;
@@ -324,9 +324,14 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
 if __name__ == '__main__':
     from core.power import Power
 
-    path = '../dataset/wepri36'
-    fmt = 'off'
+    # path = '../dataset/wepri36'
+    # fmt = 'off'
+    path = 'C:/Users/sdy/data/db/SA_2'
+    fmt = 'on'
     power = Power(fmt)
-    power.load_power(path, fmt=fmt, lp=False, st=False)
-    # ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
-    gkr = calc_gsdf(power, 0, {'acline':[29, 44]})
+    with timer('gsdf'):
+        power.load_power(path, fmt=fmt, lp=False, st=False)
+        # ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
+        # gkr = calc_gsdf(power, 0, {'acline':[29, 44]})
+        gkr = calc_gsdf(power, 0, {'acline': [10547, 10317, 10373, 11136],
+                                   'transformer': [51188]})
