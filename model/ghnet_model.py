@@ -140,7 +140,7 @@ class GHNet(object):
                               for sub_name in node.subnets if sub_name in x_lower])
                 x_sub = x_sub[0] if len(x_sub) == 1 else \
                     layers.concatenate(x_sub, axis=-1)
-                if x_sub == [] or x_sub.shape[1] <= 0:
+                if x_sub.shape[1] <= 0:
                     print("node(%s) has no input, drop it" % node.name)
                     continue
                 node.set_io_num(int(x_sub.shape[-1]),
@@ -205,18 +205,21 @@ class GHNet(object):
         :return:
         """
         print("build_multi_reg begin: n_fault =", n_fault)
-        x = self.build_inf(activation)
-        # x = layers.Dense(64, kernel_initializer=self.W_init)(x)
-        # x = activation(x)
-        x = layers.Dense(32, kernel_initializer=self.W_init)(x)
-        x = activation(x)
-        self.x_feature['high_out'] = x
-        self.y = layers.Dense(n_fault, activation=output_activation,
-                              kernel_initializer=self.W_init, name='y')(x)
-        self.pre_model = Model(self.x, self.y)
+        with tf.GradientTape(persistent=True) as tape:
+            x = self.build_inf(activation)
+            # x = layers.Dense(64, kernel_initializer=self.W_init)(x)
+            # x = activation(x)
+            x = layers.Dense(32, kernel_initializer=self.W_init)(x)
+            x = activation(x)
+            self.x_feature['high_out'] = x
+            self.y = layers.Dense(n_fault, activation=output_activation,
+                                  kernel_initializer=self.W_init, name='y')(x)
         self.gradients = []
         for i in range(n_fault):
-            self.gradients.append(K.gradients(self.y[:, i], [self.x]))
+            self.gradients.append(tape.gradient(self.y[:, i], [self.x]))
+        del tape
+
+        self.pre_model = Model(self.x, self.y)
         self.fault = Input(shape=(n_fault,), dtype='float32', name='fault')
         self.y_ = Input(shape=(n_fault,), dtype='float32', name='y_')
         loss = MultiRegLossLayer(name='multi_loss_layer')([self.y, self.y_, self.fault])

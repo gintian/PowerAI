@@ -47,6 +47,7 @@ cd PowerAI
 非常欢迎你的加入！提出 Issue 或者提交 Pull Request。
 
 感谢以下参与项目的人：
+[@zll302](https://github.com/zll302)
 
 ## 协议
 代码采用MIT协议授权，请查阅[LICENSE](./LICENSE)文件，获取更多信息。

@@ -5,6 +5,7 @@
 """
 
 import sys
+import os
 import datetime
 import argparse
 import numpy as np
@@ -23,7 +24,7 @@ if __name__ == '__main__':
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--res_type', default='cct',
                         help='Result type (cct, sst, vs, stv)')
-    parser.add_argument('--task_type', default='train',
+    parser.add_argument('--task_type', default='test',
                         help='Task type (train, test, lmd, feature, match, adjust, app_pb)')
     parser.add_argument('--path', default=None,
                         help='Path to data (*.npz), net_path=path/net, res_path=path/res_type')
@@ -35,7 +36,8 @@ if __name__ == '__main__':
                         help='Data set split strategy (random, dt)')
     args = parser.parse_args()
 
-    path = "d:/python/db/2018_11" if args.path is None else args.path
+    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2018_11')\
+        if args.path is None else args.path
     net_path = path + "/net"
     res_path = path + "/" + args.res_type
     input_dic = {'generator': ['p', 'v'],
@@ -103,26 +105,25 @@ if __name__ == '__main__':
                                                     validation_data=val_gen,
                                                     validation_steps=validation_steps)
         test_labels, pre = dataset_predict(net.pre_model, data_set, role=2)
-        save_model(res_path, args.res_type, net.pre_model, suffix='pb')
-        # save_model(res_path, args.res_type, net.pre_model, suffix='json')
+        save_model(res_path, args.res_type, net.pre_model, suffix='frozen')
+        save_model(res_path, args.res_type, net.pre_model, suffix='h5')
         write_input(data_set, res_path + "/input.txt")
         write_output(data_set.y.columns[y_columns], res_path + "/output.txt")
-        sys.exit(0)
-
-    net.pre_model.load_weights(res_path + "/" + args.res_type + ".h5")
-    dt_begin = datetime.datetime.strptime(args.dt_begin, "%Y_%m_%dT%H_%M_%S")
-    dt_end = datetime.datetime.strptime(args.dt_end, "%Y_%m_%dT%H_%M_%S") \
-             + datetime.timedelta(seconds=1)
-    y = data_set.y.values[:, y_columns]
-    row_valid = data_set.sample_prop.dt.between(dt_begin, dt_end).values
-    if only_real:
-        row_valid = row_valid & data_set.sample_prop.real
-    if not np.any(row_valid):
-        raise ValueError("empty dataset!")
-    data = data_set.input_data.loc[row_valid, data_set.column_valid].values
-    y = y[row_valid]
-    if len(y_columns) == 1:
-        y = y.reshape(y.shape[0], 1)
+    else:
+        net.pre_model.load_weights(res_path + "/" + args.res_type + ".h5")
+        dt_begin = datetime.datetime.strptime(args.dt_begin, "%Y_%m_%dT%H_%M_%S")
+        dt_end = datetime.datetime.strptime(args.dt_end, "%Y_%m_%dT%H_%M_%S") \
+                 + datetime.timedelta(seconds=1)
+        y = data_set.y.values[:, y_columns]
+        row_valid = data_set.sample_prop.dt.between(dt_begin, dt_end).values
+        if only_real:
+            row_valid = row_valid & data_set.sample_prop.real
+        if not np.any(row_valid):
+            raise ValueError("empty dataset!")
+        data = data_set.input_data.loc[row_valid, data_set.column_valid].values
+        y = y[row_valid]
+        if len(y_columns) == 1:
+            y = y.reshape(y.shape[0], 1)
 
     if args.task_type == 'test':
         indices = data_set.sample_prop[row_valid].index

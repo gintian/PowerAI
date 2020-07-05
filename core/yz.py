@@ -18,7 +18,7 @@ EPS = 1e-8
 
 
 def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
-                      on_only=True, ignore_ground_branch=True, x_only=True,
+                      on_only=True, ignore_ground_branch=True, ignore_tk=True, x_only=True,
                       ignore_nodes=None, diag_coef=1.01):
     """ 从Power实例生成导纳阵Y。
 
@@ -28,6 +28,7 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
     :param dtype: dtype. 形成矩阵时的浮点数类型，默认为float32.
     :param on_only: bool. 只考虑投运支路。
     :param ignore_ground_branch: bool. 忽略容抗器支路。
+    :param ignore_tk: bool. 忽略变压器的非标准变比
     :param x_only: bool. 只考虑电抗，忽略电阻。
     :param ignore_nodes: list. 忽略节点的索引，例如平衡节点。
     :param diag_coef: float. 对角线系数，避免矩阵不可逆。
@@ -37,9 +38,10 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
         if 'island' not in power.data['bus'].columns:
             raise ValueError("Island info not generated.")
         nodes = power.data['bus'].index[power.data['bus'].island == island].to_list()
-        columns = ['mark', 'ibus', 'jbus', 'r', 'x']
+        columns = ['mark', 'ibus', 'jbus', 'r', 'x', 'no']
+        columns_tran = ['mark', 'ibus', 'jbus', 'r', 'x', 'tk']
         branches = np.vstack((power.data['acline'][columns].values,
-                              power.data['transformer'][columns].values)).astype(dtype)
+                              power.data['transformer'][columns_tran].values)).astype(dtype)
     elif node_type == 'station':
         if 'island' not in power.stations.columns:
             raise ValueError("Island info not generated.")
@@ -48,14 +50,19 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
         branches = power.data['acline'][columns].values.astype(dtype)
     else:
         return None
+    valid = np.isin(branches[:, [1, 2]], nodes).all(axis=1)
+    branches = branches[valid]
     if on_only:
         branches = branches[branches[:, 0] == 1.]
     if ignore_ground_branch:
         branches = branches[branches[:, 1] != branches[:, 2]]
     else:
-        raise NotImplementedError("Ground branches are not considered.")
-    valid = np.isin(branches[:, [1, 2]], nodes).all(axis=1)
-    branches = branches[valid]
+        branch = branches
+        branches = branch[branch[:, 1] != branch[:, 2]]
+        ground_branch = branch[branch[:, 1] == branch[:, 2]]
+        # raise NotImplementedError("Ground branches are not considered.")
+    # valid = np.isin(branches[:, [1, 2]], nodes).all(axis=1)
+    # branches = branches[valid]
 
     if branches.shape[0] == 0:
         raise ValueError(
@@ -82,6 +89,29 @@ def generate_y_matrix(power, island, node_type='bus', dtype=np.float32,
     for i in range(y.shape[0]):
         y[i, i] = 0.0
         y[i, i] = -np.sum(y[i,]) * diag_coef
+    if not ignore_tk:
+        tran_branches = branches[branches[:, 5] < 2]
+        if x_only:
+            gbt = -1. / (tran_branches[:, 4] + EPS)  # jb = -1/jx
+        else:
+            gbt = np.vectorize(np.complex)(tran_branches[:, 3].astype(dtype),
+                                            tran_branches[:, 4].astype(dtype))
+            gbt = 1. / (gbt + EPS)  # g+jb=1/(r+jx)
+        tk = tran_branches[:, 5].astype(dtype)
+        for i, [ii, jj] in enumerate(tran_branches[:, [1, 2]].astype(np.int32)):
+            y[ii][jj] = y[jj][ii] = y[ii][jj] + gbt[i] - gbt[i] / tk[i]
+            y[jj][jj] = y[jj][jj] - gbt[i] + gbt[i] / (tk[i] * tk[i])
+    if not ignore_ground_branch:
+        ground_branch[:, 1] = node_idx.loc[ground_branch[:, 1]].values
+        if x_only:
+            grb = -1. / (ground_branch[:, 4] + EPS)
+        else:
+            grb = np.vectorize(np.complex)(ground_branch[:, 3].astype(dtype),
+                                           ground_branch[:, 4].astype(dtype))
+            grb = 1. / (grb + EPS)
+        for i, ii in enumerate(ground_branch[:, 1].astype(np.int32)):
+            y[ii][ii] = y[ii][ii] + grb[i]
+
     # y[0][0] = y[0][0] * diag_coef
     y = pd.DataFrame(data=y, index=nodes, columns=nodes)
     if ignore_nodes:
@@ -146,7 +176,7 @@ def calc_ed_from_z(z, indices=None):
 
 
 def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
-                       on_only=True, ignore_ground_branch=True, x_only=True,
+                       on_only=True, ignore_ground_branch=True, ignore_tk=True, x_only=True,
                        indices=None):
     """ 从Power实例求取电气距离。。
 
@@ -156,6 +186,7 @@ def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
     :param dtype: dtype. 形成矩阵时的浮点数类型，默认为float32.
     :param on_only: bool. 只考虑投运支路。
     :param ignore_ground_branch: bool. 忽略容抗器支路。
+    :param ignore_tk: bool. 忽略变压器的非标准变比
     :param x_only: bool. 只考虑电抗，忽略电阻。
     :param indices: 1D list. 厂站列表；
                     or 2D list. 厂站对列表；
@@ -165,7 +196,7 @@ def calc_ed_from_power(power, island, node_type='bus', dtype=np.float32,
     """
     y = generate_y_matrix(power, island, node_type=node_type, dtype=dtype,
                           on_only=on_only, ignore_ground_branch=ignore_ground_branch,
-                          x_only=x_only)
+                          ignore_tk=ignore_tk, x_only=x_only)
     z = calc_z_from_y(y)
     return calc_ed_from_z(z, indices)
 
@@ -256,7 +287,7 @@ def minset_greedy(df, thr=0.05):
 
 
 def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
-    """
+    """ 计算节点有功对支路有功的分布系数
 
     :param power: Power. Power数据示例。
     :param island: int. 岛号。
@@ -321,6 +352,68 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
     return gkr
 
 
+def calc_vps(power, island, buses, node_type='station'):
+    """ 计算节点无功对节点电压的灵敏度
+
+    :param power: Power. Power数据示例。
+    :param island: int. 岛号。
+    :param buses: dict. {'node': [index...]}
+    :param node_type: str. 'bus'表示以母线为单元建模，'station'表示以厂站为单元建模。
+    :return: pd.DataFrame. 灵敏度矩阵，每行代表一个节点，每列代表一个发电机或电容器节点。
+    """
+    generators = power.data['generator']
+    slack = generators[generators['type'] == 0]['bus']
+    slack = power.data['bus'].loc[slack]
+    slack = slack[slack['island'] == island].index[0]
+    gens = generators['bus']
+    gens = power.data['bus'].loc[gens]
+    gens = gens[gens['island'] == island].index.to_list()
+    branches = power.data['acline']
+    branches = branches[branches['ibus'] == branches['jbus']]
+    brans = branches['ibus'].drop_duplicates()
+    brans = power.data['bus'].loc[brans]
+    brans = brans[brans['island'] == island].index.to_list()
+    nodes = power.data['bus'].index[power.data['bus'].island == island].to_list()
+    indices = buses.get('bus', [])
+    if node_type == 'station':
+        slack = power.data['bus'].loc[slack, 'st_no']
+        gens = power.data['bus'].loc[gens, 'st_no'].drop_duplicates().values.tolist()
+        brans = power.data['bus'].loc[brans, 'st_no'].drop_duplicates().values.tolist()
+        nodes = power.data['bus'].loc[nodes, 'st_no'].drop_duplicates().values.tolist()
+        indices = power.data['bus'].loc[indices, 'st_no'].values.tolist()
+    y = generate_y_matrix(power, island, node_type=node_type, on_only=True,
+                          ignore_ground_branch=False, ignore_tk=False, x_only=False,
+                          ignore_nodes=[slack], diag_coef=1.00)
+    gens.remove(slack)
+    nodes.remove(slack)
+    if np.isin(slack, brans):
+        brans.remove(slack)
+    gens = list(set(gens).intersection(set(y.index.tolist())))
+    brans = list(set(brans).intersection(set(y.index.tolist())))
+    nodes = list(set(nodes).intersection(set(y.index.tolist())))
+    no_gen = list(set(gens + brans))
+    no_load = list(set(nodes) - set(no_gen))
+    no_all = no_load + no_gen
+    yp = y.reindex(index=no_all, columns=no_all)
+    ya = yp.values
+    yab = np.imag(ya)
+    ypb = pd.DataFrame(data=yab, index=no_all, columns=no_all)
+    rypb = -calc_z_from_y(ypb)
+    RDG = rypb.loc[no_load, no_gen]
+    RGG = rypb.loc[no_gen, no_gen]
+    gk = np.zeros((len(indices), len(no_gen)), dtype=np.float32)
+    for ii, idx in enumerate(indices):
+        if np.isin(idx, no_load):
+            gk[ii, :] = RDG.loc[idx]
+        elif np.isin(idx, no_gen):
+            gk[ii, :] = RGG.loc[idx]
+        else:
+            print(idx, "is slackbus")
+
+    gk = pd.DataFrame(gk, index=indices, columns=no_gen)
+    return gk
+
+
 if __name__ == '__main__':
     from core.power import Power
 
@@ -333,5 +426,7 @@ if __name__ == '__main__':
         power.load_power(path, fmt=fmt, lp=False, st=False)
         # ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
         # gkr = calc_gsdf(power, 0, {'acline':[29, 44]})
-        gkr = calc_gsdf(power, 0, {'acline': [10547, 10317, 10373, 11136],
-                                   'transformer': [51188]})
+        # gkr = calc_gsdf(power, 0, {'acline': [10547, 10317, 10373, 11136],
+        #                            'transformer': [51188]})
+        vps = calc_vps(power, 0, {'bus': [878, 914]}, 'bus')
+

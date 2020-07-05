@@ -17,13 +17,14 @@ from core.misc import dict_list_append
 from common.cmd_util import call_wmlf, call_psa, check_lfcal
 from common.efile_util import read_efile, update_table_header
 
-
 EPS = 1e-8
 LOAD_CHANGE_THR = 0.5
+PF_LOADFULL_REWARD = +0.5
 PF_NOTCONV_REWARD = -1.2
-PF_LOADFULL_REWARD = +1.0
 ST_UNSTABLE_REWARD = -1.0
-CCT_CHANGE_RATIO = 10.
+STEP_REWARD = 0.1
+
+# CCT_CHANGE_RATIO = 10.
 
 
 class OpEnv(object):
@@ -62,41 +63,45 @@ class OpEnv(object):
             return os.path.join(self.work_path, 'ep%06d' % ep)
         return os.path.join(self.work_path, 'ep%06d' % ep, str(step))
 
-    def reset(self, random=True, load_path=None):
+    def reset(self, random=True, load_path=None, max_try=10):
         """ 重置潮流，并进行评估。
 
         :param random: bool. 是否随机初始化潮流。
         :param load_path: str. 初始断面目录；
                           or None. 用self.base_path作为初始断面。
+        :param max_try: int. 最大重试次数。
         :return: bool. 是否重置成果(not done)
         """
-        if load_path is None:
-            self.power.load_power(self.base_path, fmt=self.fmt)
-        else:
-            self.power.load_power(load_path, fmt=self.fmt)
-        self.power.data['generator']['p0'] = self.power.data['generator']['p']
+        load_path = self.base_path if load_path is None else load_path
         self.episode += 1
-        path = self.get_ep_path()
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        os.mkdir(path)
-        self.step = -1
-        self.assessments = []
-        if random:
-            generators = self.power.data['generator']
-            loads = self.power.data['load']
-            max_p, gen_p = np.sum(generators[['pmax', 'p']])
-            p = max_p * 0.4 + max_p * 0.5 * np.random.rand()  # 40% ~ 90%
-            distribute_generators_p(generators, p - gen_p, sigma=0.2)
-            generators['p0'] = np.clip(generators['p0'],
-                                       generators['pmin'], generators['pmax'])
-            gen_p = np.sum(generators['p0'])
-            load_p = np.sum(loads['p'])
-            distribute_loads_p(loads, 0.9 * gen_p - load_p, p_sigma=0.1, keep_factor=False)
-            random_load_q0(loads, sigma=None)
         self.min_max = None
         self.init_load_p = 0.
-        self.state0, _, done = self.run_step()
+        path = self.get_ep_path()
+        shutil.rmtree(path, ignore_errors=True)
+        os.mkdir(path)
+        for _ in range(max(1, max_try)):
+            self.step = -1
+            self.assessments = []
+            self.power.load_power(load_path, fmt=self.fmt)
+            if random:
+                generators = self.power.data['generator']
+                loads = self.power.data['load']
+                generators['p0'] = generators['p']
+                # gl_rate = np.sum(generators['p']) / np.sum(loads['p'])
+                max_p, p0 = np.sum(generators[['pmax', 'p0']])
+                p = max_p * (0.4 + 0.5 * np.random.rand())  # 40% ~ 90%
+                distribute_generators_p(generators, p - p0, sigma=0.2)
+                generators['p0'] = np.clip(generators['p0'],
+                                           generators['pmin'], generators['pmax'])
+                # dp = np.sum(generators['p0']) - p0
+                gen_p = np.sum(generators['p0'])
+                load_p = np.sum(loads['p0'])
+                distribute_loads_p(loads, 0.9 * gen_p - load_p, p_sigma=0.1, keep_factor=False)
+                # distribute_loads_p(loads, dp / gl_rate, p_sigma=0.1, keep_factor=False)
+                random_load_q0(loads, sigma=None)
+            self.state0, _, done = self.run_step()
+            if not done:
+                break
         return not done
 
     def get_state(self, normalize=True):
@@ -132,10 +137,12 @@ class OpEnv(object):
         self.init_load_p = np.sum(loads.loc[loads['mark'] == 1, 'p0'])
 
     @staticmethod
-    def make_assessment(path):
+    def make_assessment(path, method='min', **kwargs):
         """ 对断面稳定结果进行打分。
 
         :param path: str. 指定断面目录，包含*.res结果文件。
+        :param method: str. 'min'取最小值；'avg'取平均值；'grade'取分档平均值。
+        :param kwargs: dict. 相关参数字典。
         :return: (float, bool, np.array). 评分、结束标志、稳定结果。
         """
         headers = {'CCTOUT': 'no desc name cct gen1 gen2 times tmp1 tmp2'}
@@ -147,18 +154,26 @@ class OpEnv(object):
                 cct = read_efile(os.path.join(path, file_name), iwant.keys(), iwant)
                 results.append(cct['CCTOUT']['cct'])
         results = pd.concat(results)
-        values = results.values.reshape(-1,)
+        values = results.values.reshape(-1, )
         values = values[~np.isnan(values)]
-        values = values[values > 0.]
+        values = values[values >= 0.]
         if len(values) == 0 or np.min(values) < 0.1:
             return ST_UNSTABLE_REWARD, True, results
-        thrs = [0.3, 0.5]
-        # thrs = [1.0]
-        for thr in thrs:
-            values_lt = values[values < thr]
-            if len(values_lt) > 0:
-                return np.average(values_lt), False, results
-        return thrs[-1], False, results
+        if method == 'min':
+            min_n = kwargs.get('min_n', 1)
+            values.sort()
+            return np.average(values[:min_n]), False, results
+        elif method == 'avg':
+            return np.average(values), False, results
+        elif method == 'grade':
+            thrs = kwargs.get('min_n', [0.3, 0.5])
+            for thr in thrs:
+                values_lt = values[values < thr]
+                if len(values_lt) > 0:
+                    return np.average(values_lt), False, results
+            return thrs[-1], False, results
+        else:
+            raise NotImplementedError('Method =', method)
 
     def run_step(self, actions=None):
         """ 按照给定actions运行一步。
@@ -175,6 +190,7 @@ class OpEnv(object):
                                keep_factor=True, factor_sigma=0.1)
         elif actions is not None:
             self.load_action(actions)
+        shutil.rmtree(path, ignore_errors=True)
         self.power.save_power(path, self.fmt, lf=True, lp=False, st=True)
         shutil.copy(os.path.join(self.base_path, 'LF.L0'), path)
         shutil.copy(os.path.join(self.base_path, 'ST.S0'), path)
@@ -188,7 +204,7 @@ class OpEnv(object):
             state = self.get_state()
             if os.name != 'nt':
                 call_psa(path)
-                assess, done, _ = self.make_assessment(path)
+                assess, done, _ = self.make_assessment(path, method='min', min_n=3)
             else:
                 assess = np.random.rand()
                 done = (assess < 0.1)
@@ -200,24 +216,24 @@ class OpEnv(object):
         if self.step == 0:
             reward = 0.
         else:
-            reward = self.assessments[-1] - self.assessments[-2]
+            # reward = self.assessments[-1] - self.assessments[-2] + STEP_REWARD
+            reward = assess
             if not done:
-                reward *= CCT_CHANGE_RATIO
+                # reward *= CCT_CHANGE_RATIO
                 loads = self.power.data['load']
                 load_p = np.sum(loads.loc[loads['mark'] == 1, 'p0'])
                 if abs(load_p - self.init_load_p) / self.init_load_p >= LOAD_CHANGE_THR:
                     reward += PF_LOADFULL_REWARD
                     done = True
             else:
-                pass
-                # reward = assess
+                reward = assess
         return state, reward, done
 
     def load_action(self, actions):
         """ 加载潮流修改动作，但不计算潮流。
 
         :param actions: dict. 动作字典：'load_ratio_p'~按比例调整负荷有功；
-                                       'generator_ratio_p'~按比例调整机组有功。
+                                      'generator_ratio_p'~按比例调整机组有功。
         :return: np.array. 归一化的状态量。
         """
         for k in actions:
@@ -267,7 +283,8 @@ def load_trend(path, fmt, inputs):
                 for col in columns:
                     name = '_'.join((etype, col))
                     dict_list_append(data, name, df[col])
-        score, _, res = OpEnv.make_assessment(os.path.join(path, str(i)))
+        score, _, res = OpEnv.make_assessment(os.path.join(path, str(i)),
+                                              method='min', min_n=3)
         if 'score' in inputs:
             dict_list_append(data, 'score', pd.Series([score]))
         if 'res' in inputs:
@@ -346,4 +363,3 @@ if __name__ == '__main__':
     ax_score.set_xlabel('Round')
     ax_score.set_ylabel('Score')
     ax_score.legend()
-

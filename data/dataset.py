@@ -188,10 +188,12 @@ if __name__ == '__main__':
                     os.path.join(path, file_name), fmt='on', dirs=[dir])
     """
 
-    path = 'D:/python/db/2019_09_12/data/'
-    iwant = {'generator': ['p', 'v'],
-             'station': ['pl', 'ql'],
-             'dcline': None}
+    # path = 'D:/python/db/2019_09_12/data/'
+    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2019_09_12', 'key')
+    # iwant = {'generator': ['p', 'v'],
+    #          'station': ['pl', 'ql'],
+    #          'dcline': None}
+    iwant = {'key': None}
     for etype in iwant:
         with timer('Collect data [%s] for [%s]' % (path, etype)):
             data = collect_learning_data(path, etype, iwant[etype])

@@ -7,7 +7,7 @@
 import os
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras.backend as K
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 import matplotlib.pyplot as plt
 
 
@@ -50,9 +50,9 @@ def write_adjust(adjusts, file_name):
             f.write("%s %.4f %.4f\n" % (k, v, dv))
 
 
-def save_model(path, name, model, suffix='h5'):
+def save_model(path, name, model, suffix='tf'):
     """
-    Save model for .h5/.json/.pb
+    Save model for h5/json/pb/tf/frozen
 
     :param path: str.
     :param name: str.
@@ -63,32 +63,31 @@ def save_model(path, name, model, suffix='h5'):
         os.mkdir(path)
     if suffix == 'h5':
         model.save(path + "/" + name + ".h5")
+        # tf.keras.models.save_model(model, path, save_format='h5')
     elif suffix == 'json':
         model_json = model.to_json()
         with open(path + "/" + name + ".json", "w") as json_file:
             json_file.write(model_json)
         model.save_weights(path + "/" + name + ".h5")
-    elif suffix == 'pb':
-        builder = tf.saved_model.builder.SavedModelBuilder(path + "/model")
-        sess = K.get_session()
-        builder.add_meta_graph_and_variables(sess,
-                                             [tf.saved_model.tag_constants.SERVING])
-        builder.add_meta_graph(["GHNet"])
-        builder.save()
-        # sess = K.get_session()
-        # frozen_graph_def = tf.graph_util.convert_variables_to_constants(
-        #                       sess,
-        #                       sess.graph_def,
-        #                       output_node_names=["y/BiasAdd"])
-        # tf.train.write_graph(frozen_graph_def,
-        #                       path,
-        #                       name + '.pb',
-        #                       as_text = False)
+    elif suffix == 'pb' or suffix == 'tf':
+        tf.keras.models.save_model(model, path, save_format='tf')
+    elif suffix == 'frozen':
+        full_model = tf.function(lambda x: model(x))
+        full_model = full_model.get_concrete_function(
+            x=tf.TensorSpec(model.inputs[0].shape, model.inputs[0].dtype))
+        frozen_func = convert_variables_to_constants_v2(full_model)
+        frozen_func.graph.as_graph_def()
+        tf.io.write_graph(graph_or_graph_def=frozen_func.graph,
+                          logdir=path,
+                          name=name+'.pb',
+                          as_text=False)
+    else:
+        raise TypeError('suffix=\'%s\'' % suffix)
 
 
-def load_model(path, name, suffix='h5'):
+def load_model(path, name, suffix='tf'):
     """
-    Load model from .h5/.json/.pb
+    Load model from h5/json/pb/tf/frozen
 
     :param path: str.
     :param name: str.
@@ -105,8 +104,12 @@ def load_model(path, name, suffix='h5'):
         model = tf.keras.models.model_from_json(loaded_model_json)
         # load weights into new model
         model.load_weights(path + "/" + name + ".h5")
-    elif suffix == 'pb':
-        pass
+    elif suffix == 'pb' or suffix == 'tf':
+        model = tf.keras.models.load_model(path)
+    elif suffix == 'frozen':
+        raise NotImplementedError('suffix=\'%s\'' % suffix)
+    else:
+        raise TypeError('suffix=\'%s\'' % suffix)
     return model
 
 
