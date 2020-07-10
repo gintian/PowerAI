@@ -41,7 +41,7 @@ class PowerGraph:
             values = np.vstack((power.data['acline'][columns].values,
                                 power.data['transformer'][columns].values))
         elif node_type == 'station':
-            for t in power.stations['name'].items():
+            for t in power.stations['unique_name'].items():
                 g.add_node(t[0], name=t[1])
             columns = ['st_i', 'st_j', 'x', 'mark']
             values = power.data['acline'][columns].values
@@ -74,7 +74,7 @@ class PowerGraph:
             values = pd.concat([power.data['acline'][columns],
                                 power.data['transformer'][columns]])
         elif node_type == 'station':
-            for t in power.stations['name'].items():
+            for t in power.stations['unique_name'].items():
                 g.add_node(t[0], name=t[1])
             columns = ['st_i', 'st_j', 'mark', 'name'] + prop_columns
             values = power.data['acline'][columns]

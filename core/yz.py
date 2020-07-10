@@ -292,7 +292,7 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
     :param power: Power. Power数据示例。
     :param island: int. 岛号。
     :param branches: dict. {'acline': [index...], 'transformer': [index...]}
-    :param alpha: str. 'single'表示平衡机独立承担，函数退化为常规的GSDF。
+    :param alpha: str. 'single'表示平衡机独立承担，函数退化为常规的GSDF，'zwt'表示所有机组共同承担不平衡出力
     :param node_type: str. 'bus'表示以母线为单元建模，'station'表示以厂站为单元建模。
     :return: pd.DataFrame. 灵敏度矩阵，每行代表一个支路，每列代表一个机组（含平衡机）。
     """
@@ -307,6 +307,7 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
         slack = power.data['bus'].loc[slack, 'st_no']
         gens = power.data['bus'].loc[gens, 'st_no'].drop_duplicates().values.tolist()
     gens.remove(slack)
+
     y = generate_y_matrix(power, island, node_type=node_type,
                           ignore_nodes=[slack], diag_coef=1.0)
     x = calc_z_from_y(y)
@@ -340,15 +341,45 @@ def calc_gsdf(power, island, branches, alpha='single', node_type='bus'):
     gk = pd.DataFrame(gk, index=indices, columns=x.columns)[gens]
     gk[slack] = 0.
 
+    n_gen = len(gk.columns)
     if alpha == 'single':
         alpha = pd.Series(0., index=gk.columns, dtype=np.float32)
         alpha.loc[slack] = 1.
-    else:
-        raise NotImplementedError
-    n_gen = len(gk.columns)
-    fu = np.eye(n_gen) - np.dot(alpha.values[:, np.newaxis], np.ones((1, n_gen)))
-    gkr = np.dot(gk, fu)
+        gen_factor = np.eye(n_gen) - np.dot(alpha.values[:, np.newaxis], np.ones((1, n_gen)))
+    elif alpha == 'zwt':
+        if node_type == 'bus':
+            column_gen = ['p0', 'pmax']
+            gen_p = power.data['generator'].loc[gk.columns]
+            gen_p = gen_p[column_gen]
+            gen_p.loc[slack, column_gen] = 0.
+            gen_p = gen_p.values.astype(dtype)
+            gen_px = (gen_p[:, 1] - gen_p[:, 0]) / np.sum((gen_p[:, 1] - gen_p[:, 0]))
+            gen_px[gen_px < EPS] = EPS
+            gen_factor = np.eye(n_gen) - np.dot(gen_px[:, np.newaxis], np.ones((1, n_gen)))
+            gen_factor = np.dot(gen_factor, np.eye(n_gen) / gen_factor[np.diag_indices(n_gen)])
+            gen_factor = pd.DataFrame(gen_factor, index=gk.columns, columns=gk.columns)
+        else:
+            column_gen = ['st_no', 'p0', 'pmax']
+            gen_bus = generators[generators['mark'] == 1]['bus']
+            gen_bus = power.data['bus'].loc[gen_bus]
+            gen_bus = gen_bus[gen_bus['island'] == island].index.to_list()
+            gen_bus_p = power.data['generator'].loc[gen_bus]
+            gen_bus_p = gen_bus_p[column_gen]
+            gen_bus_p.index = gen_bus_p['st_no']
+            gen_bus_p.loc[slack, ['p0', 'pmax']] = 0.
+            sump_sta = np.zeros((len(gk.columns), 1), dtype=np.float32)
+            for ii, idx in enumerate(gk.columns):
+                p_sta = gen_bus_p[gen_bus_p['st_no'] == idx]
+                sump_sta[ii] = np.sum(p_sta['pmax'] - p_sta['p0'])
+            px_sta = sump_sta / np.sum(sump_sta)
+            px_sta[px_sta < EPS] = EPS
+            gen_factor = np.eye(n_gen) - np.dot(px_sta, np.ones((1, n_gen)))
+            gen_factor = np.dot(gen_factor, np.eye(n_gen) / gen_factor[np.diag_indices(n_gen)])
+            gen_factor = pd.DataFrame(gen_factor, index=gk.columns, columns=gk.columns)
+    #fu = np.eye(n_gen) - np.dot(alpha.values[:, np.newaxis], np.ones((1, n_gen)))
+    gkr = np.dot(gk, gen_factor)
     gkr = pd.DataFrame(gkr, index=gk.index, columns=gk.columns)
+    gkr = gkr.T
     return gkr
 
 
@@ -426,7 +457,7 @@ if __name__ == '__main__':
         power.load_power(path, fmt=fmt, lp=False, st=False)
         # ed = calc_ed_from_power(power, island=0, node_type='bus', x_only=False)
         # gkr = calc_gsdf(power, 0, {'acline':[29, 44]})
-        # gkr = calc_gsdf(power, 0, {'acline': [10547, 10317, 10373, 11136],
-        #                            'transformer': [51188]})
+        gkr = calc_gsdf(power, 0, {'acline': [ 10547, 10317, 10373, 11136],
+                                   'transformer': [51188]}, alpha= 'zwt', node_type='station')
         vps = calc_vps(power, 0, {'bus': [878, 914]}, 'bus')
 

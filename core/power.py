@@ -236,7 +236,8 @@ class Power:
         Power.set_flag(df, True, flag)
         if base is None:
             return df
-        df = df.reindex(index=base.index, fill_value=0)
+        # df = df.reindex(index=base.index, fill_value=0)
+        df = df.reindex(index=base.index, fill_value=np.nan)
         Power.set_flag(base, df['flag'] > 0, flag)
         columns = [col for col in df.columns if col not in base.columns]
         return pd.concat([base, df[columns]], axis=1)
@@ -656,14 +657,17 @@ class Power:
             self.generate_island_info()
         names = ['%s_%d' % (n, i) for idx, n, i in
                  self.data['bus'][['st_name', 'island']].itertuples()]
-        self.stations = pd.DataFrame(data=list(set(names)), columns=['name'])
+        self.stations = pd.DataFrame(data=list(set(names)), columns=['unique_name'])
         self.stations['island'] = \
-            [int(name.split('_')[-1]) for name in self.stations['name']]
-        self.stations['ori_name'] = \
-            [name[:name.rindex('_')] for name in self.stations['name']]
+            [int(name.split('_')[-1]) for name in self.stations['unique_name']]
+        self.stations['name'] = \
+            [name[:name.rindex('_')] for name in self.stations['unique_name']]
         name_idx = pd.DataFrame(data=range(self.stations.shape[0]),
-                                index=self.stations.name)
+                                index=self.stations['unique_name'])
         self.data['bus']['st_no'] = name_idx.loc[names].values
+        self.stations = self.stations[self.stations['island'] >= 0]
+        self.stations.loc[-1] = ['Unplugged_-1', -1, 'Unplugged']
+        self.data['bus'].loc[self.data['bus']['island'] < 0, 'st_no'] = -1
         self.stations['vl'] = self.data['bus'].groupby('st_no', sort=False)\
             .agg({'vl':'max'})
         self.data['acline']['st_i'] = \
@@ -676,6 +680,35 @@ class Power:
             self.data['bus'].loc[self.data['generator'].bus, 'st_no'].values
         self.data['load']['st_no'] = \
             self.data['bus'].loc[self.data['load'].bus, 'st_no'].values
+        self.data['station'] = self.stations
+
+    def extend_lp_info(self, real_only=False):
+        """ 扩展潮流结果的存储方式，便于查询，但存在重复数据，更加占用空间。
+
+        :param real_only: bool. 只考虑真实设备。
+        :return:
+        """
+        if 'generator' in self.data:
+            self.data['generator']['v'] = \
+                self.data['bus'].loc[self.data['generator']['bus'], 'v']
+        if 'load' in self.data:
+            self.data['load']['v'] = \
+                self.data['bus'].loc[self.data['load']['bus'], 'v'].values
+        if 'station' in self.data:
+            generators = self.data['generator']
+            valid = generators['mark'] == 1
+            if real_only:
+                valid &= ~generators['name'].str.contains('@')
+            generators = generators[valid]
+            self.data['station'][['pg', 'qg']] = generators.groupby('st_no', sort=False) \
+                .agg({'p': 'sum', 'q': 'sum'})
+            loads = self.data['load']
+            valid = loads['mark'] == 1
+            if real_only:
+                valid &= ~loads['name'].str.contains('@')
+            loads = loads[valid]
+            self.data['station'][['pl', 'ql']] = loads.groupby('st_no', sort=False) \
+                .agg({'p': 'sum', 'q': 'sum'})
 
     def save_power(self, path, fmt='on', lf=True, lp=True, st=True, miss='fill'):
         """ 保存数据目录。
