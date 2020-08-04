@@ -168,6 +168,7 @@ def collect_learning_res(path, rtypes):
         res[r] = pd.concat(data[r].values(), keys=data[r].keys())
         for col in res[r].columns:
             sub = res[r][col].unstack()
+            sub.sort_index(inplace=True)
             sub.to_csv(os.path.join(path, col + '.txt'), sep="\t", encoding="gbk")
     return res
 

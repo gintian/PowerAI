@@ -6,9 +6,14 @@
 
 import os
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 import matplotlib.pyplot as plt
+
+from core.power import Power
+from data.ghnet_data import mm_normalize, mm_denormalize
+from core.action import set_values
 
 
 def write_input(data_set, file_name):
@@ -24,6 +29,20 @@ def write_input(data_set, file_name):
                 f.write("%s %s %f %f\n" % (t, elem,
                                            data_set.column_min[i],
                                            data_set.column_max[i]))
+
+
+def load_input(file_name, input_mode=False):
+    input_fmt = pd.read_table(file_name, names=['etype', 'name', 'min', 'max'],
+                              encoding='gbk', index_col=False, sep=' ')
+    input_fmt['dtype'] = ''
+    has_sub = input_fmt['etype'].str.contains('_')
+    ss = input_fmt.loc[has_sub, 'etype'].str.split('_')
+    ss = pd.DataFrame(ss.values.tolist(), index=ss.index, columns=['etype', 'dtype'])
+    input_fmt.loc[has_sub, ['etype', 'dtype']] = ss
+    if input_mode:
+        input_fmt.loc[input_fmt['dtype'] == 'p', 'dtype'] = 'p0'
+        input_fmt.loc[input_fmt['dtype'] == 'q', 'dtype'] = 'q0'
+    return input_fmt
 
 
 def write_output(targets, file_name):
@@ -79,7 +98,7 @@ def save_model(path, name, model, suffix='tf'):
         frozen_func.graph.as_graph_def()
         tf.io.write_graph(graph_or_graph_def=frozen_func.graph,
                           logdir=path,
-                          name=name+'.pb',
+                          name=name + '.pb',
                           as_text=False)
     else:
         raise TypeError('suffix=\'%s\'' % suffix)
@@ -167,5 +186,57 @@ def plt_loss(history):
     plt.legend()
 
 
+def load_power_input(input_fmt, power_or_path, fmt='on', normalize=True):
+    if isinstance(power_or_path, str):
+        power = Power(fmt=fmt)
+        power.load_power(power_or_path, fmt=fmt)
+        power.extend_lp_info(real_only=False)
+    else:
+        power = power_or_path
+    values = np.empty(input_fmt.shape[0], dtype=np.float32) + np.nan
+    for i, (idx, etype, dtype, name) in \
+            enumerate(input_fmt[['etype', 'dtype', 'name']].itertuples()):
+        if etype == 'ed':
+            # TODO: deal with ed
+            continue
+        else:
+            try:
+                v = power.data[etype].loc[power.data[etype]['name'] == name, dtype]
+                if len(v) > 0:
+                    values[i] = v.values[0]
+                # values.append(v.values[0] if len(v) > 0 else np.nan)
+            except KeyError:
+                # print(etype, dtype, name)
+                # values.append(np.nan)
+                continue
+    if normalize:
+        values = mm_normalize(values, input_fmt['min'].values, input_fmt['max'].values)
+    values[np.isnan(values)] = -1.
+    return values
+
+
+def restore_power_input(input_fmt, power_or_path, fmt='on', normalize=True):
+    if isinstance(power_or_path, str):
+        power = Power(fmt=fmt)
+        power.load_power(power_or_path, fmt=fmt)
+        power.extend_lp_info(real_only=False)
+    else:
+        power = power_or_path
+    if normalize:
+        input_fmt['value'] = mm_denormalize(input_fmt['value'].values,
+                                            input_fmt['min'].values, input_fmt['max'].values)
+    group = input_fmt.groupby(['etype', 'dtype'], sort=False)
+    for (e, d), idx in group.indices.items():
+        values = power.data[e][[d, 'name']].copy()
+        indices = values.index
+        values.set_index('name', inplace=True)
+        values = input_fmt.loc[idx, ['name', 'value']].set_index('name')
+        values.index = indices
+        set_values(power.data, e, d, values['value'])
+    return power
+
+
 if __name__ == '__main__':
-    pass
+    input_file = 'C:/Users/sdy/data/db/2018_11/cct/input.txt'
+    data_path = 'C:/Users/sdy/data/db/2018_11/net'
+    ret = load_power_input(input_file, data_path)

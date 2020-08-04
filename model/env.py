@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 from core.power import Power
 from core.action import distribute_generators_p, distribute_loads_p, \
-    set_gl_p0, random_load_q0
+    set_gl_p0, random_load_q0, random_open_acline
 from core.misc import dict_list_append
 from common.cmd_util import call_wmlf, call_psa, check_lfcal
 from common.efile_util import read_efile, update_table_header
@@ -23,6 +23,7 @@ PF_LOADFULL_REWARD = +0.5
 PF_NOTCONV_REWARD = -1.2
 ST_UNSTABLE_REWARD = -1.0
 STEP_REWARD = 0.1
+
 
 # CCT_CHANGE_RATIO = 10.
 
@@ -91,8 +92,6 @@ class OpEnv(object):
                 max_p, p0 = np.sum(generators[['pmax', 'p0']])
                 p = max_p * (0.4 + 0.5 * np.random.rand())  # 40% ~ 90%
                 distribute_generators_p(generators, p - p0, sigma=0.2)
-                generators['p0'] = np.clip(generators['p0'],
-                                           generators['pmin'], generators['pmax'])
                 # dp = np.sum(generators['p0']) - p0
                 gen_p = np.sum(generators['p0'])
                 load_p = np.sum(loads['p0'])
@@ -258,6 +257,47 @@ class OpEnv(object):
             print('state =', self.get_state())
         if assessment:
             print('assessment =', self.assessments)
+
+    @staticmethod
+    def random_generate(base_path, fmt, size, out_path,
+                        min_p=None, max_p=None, gl_ratio=0.9,
+                        random_q0=True, random_open=False, open_prob=[0.8]):
+        power = Power(fmt=fmt)
+        power.load_power(base_path, fmt=fmt)
+        generators_bak = power.data['generator'].copy()
+        loads_bak = power.data['load'].copy()
+        if random_open:
+            aclines_bak = power.data['acline'].copy()
+        min_p = np.sum(generators_bak['pmin']) if not min_p else min_p
+        max_p = np.sum(generators_bak['pmax']) if not max_p else max_p
+        p0 = np.sum(generators_bak['p0'])
+        shutil.rmtree(out_path, ignore_errors=True)
+        os.mkdir(out_path)
+        conv_count = 0
+        for i in range(size):
+            generators = power.data['generator'] = generators_bak.copy()
+            loads = power.data['load'] = loads_bak.copy()
+            if random_open:
+                power.data['acline'] = aclines_bak.copy()
+            p = min_p + (max_p - min_p) * np.random.rand()
+            distribute_generators_p(generators, p - p0, sigma=0.2)
+            gen_p = np.sum(generators['p0'])
+            load_p = np.sum(loads['p0'])
+            distribute_loads_p(loads, gl_ratio * gen_p - load_p,
+                               p_sigma=0.2, keep_factor=False)
+            if random_q0:
+                random_load_q0(loads, sigma=None)
+            if random_open:
+                open_num = np.sum(np.random.rand(1) > open_prob)
+                random_open_acline(power, num=open_num)
+            path = os.path.join(out_path, '%08d' % i)
+            power.save_power(path, fmt, lf=True, lp=False, st=True)
+            shutil.copy(os.path.join(base_path, 'LF.L0'), path)
+            shutil.copy(os.path.join(base_path, 'ST.S0'), path)
+            call_wmlf(path)
+            if check_lfcal(path):
+                conv_count += 1
+        print('Random generate done: %d / %d' % (conv_count, size))
 
 
 def load_trend(path, fmt, inputs):

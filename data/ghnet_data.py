@@ -14,6 +14,20 @@ import datetime
 from model.ghnet_model import GHNet
 from core.power import load_elem_info
 
+EPS = 1e-8
+
+
+def mm_normalize(values, min_values, max_values, range_min=-1.0, range_max=1.0):
+    delta = max_values - min_values + EPS
+    ret = (range_max - range_min) * (values - min_values) / delta + range_min
+    ret = np.clip(ret, range_min, range_max)
+    return ret
+
+
+def mm_denormalize(values, min_values, max_values, range_min=-1.0, range_max=1.0):
+    delta = max_values - min_values
+    return (values - range_min) * delta / (range_max - range_min) + min_values
+
 
 class GHData(object):
     """
@@ -49,11 +63,12 @@ class GHData(object):
 
         self.data_sets = {}
 
-    def load_x(self, x_ratio_thr=0.2):
+    def load_x(self, x_ratio_thr=0.2, dt_idx=True):
         """
         Load input_data, sample_prop
 
         :param x_ratio_thr: float. Invalid column if valid ratio < x_ratio_thr
+        :param dt_idx: bool. Is index datetime?
         """
         print("loading data...")
         n_column = len(self.input_layer)
@@ -84,11 +99,16 @@ class GHData(object):
         valid = np.sum(self.input_data.isna() == False, axis=0)
         valid = (valid / self.input_data.shape[0]) > x_ratio_thr
         self.column_valid = (indices >= 0) & valid.values
-        dt = pd.to_datetime(self.input_data.index,
-                            format='%Y_%m_%dT%H_%M_%S',
-                            exact=False).values
-        real = (self.input_data.index.str.len() == 19)
-        role = np.zeros((len(self.input_data.index),), dtype=np.int32)
+        if dt_idx:
+            dt = pd.to_datetime(self.input_data.index,
+                                format='%Y_%m_%dT%H_%M_%S',
+                                exact=False).values
+            real = (self.input_data.index.str.len() == 19)
+            role = np.zeros((len(self.input_data.index),), dtype=np.int32)
+        else:
+            dt = np.nan
+            real = True
+            role = 0
         self.sample_prop = pd.DataFrame({'dt': dt, 'real': real, 'role': role},
                                         index=self.input_data.index)
         print("data loaded: ", self.input_data.shape)
@@ -119,10 +139,42 @@ class GHData(object):
             self.y[self.y <= 0.0] = np.NaN
             self.y[self.y >= 0.99] = np.NaN
         self.y = self.y.reindex(self.input_data.index)
-        valid = np.sum(self.y.isna() == False, axis=0)
+        valid = np.sum(~self.y.isna(), axis=0)
         valid = (valid / self.y.shape[0]) > y_ratio_thr
         self.y = self.y.loc[:, valid.values]
         print("y loaded: ", self.y.shape)
+
+    def save_data(self, file_name, save_input=True, save_ori=False, save_norm=True):
+        data_dict = {'input_layer': self.input_layer}
+        if save_input:
+            data_dict['input_data'] = self.input_data.values
+            data_dict['input_data_index'] = self.input_data.index
+            data_dict['input_data_columns'] = self.input_data.columns
+        if save_ori:
+            data_dict['ori_data'] = self.ori_data.values
+            data_dict['ori_data_index'] = self.ori_data.index
+            data_dict['ori_data_columns'] = self.ori_data.columns
+        if save_norm:
+            data_dict['column_valid'] = self.column_valid
+            data_dict['column_min'] = self.column_min
+            data_dict['column_max'] = self.column_max
+        np.savez(file_name, **data_dict)
+
+    def load_data(self, file_name):
+        arch = np.load(file_name, allow_pickle=True)
+        self.input_layer = [(t, elem) for t, elem in arch['input_layer']]
+        if 'input_data' in arch:
+            self.input_data = pd.DataFrame(arch['input_data'],
+                                           index=arch['input_data_index'],
+                                           columns=arch['input_data_columns'])
+        if 'ori_data' in arch:
+            self.ori_data = pd.DataFrame(arch['ori_data'],
+                                         index=arch['ori_data_index'],
+                                         columns=arch['ori_data_columns'])
+        if 'column_valid' in arch:
+            self.column_valid = arch['column_valid']
+            self.column_min = arch['column_min']
+            self.column_max = arch['column_max']
 
     def get_y_indices(self, targets):
         """
@@ -152,10 +204,12 @@ class GHData(object):
 
     def get_column_minmax(self):
         """
-        Initial column_vali, column_min, column_max before normalize
+        Initial column_valid, column_min, column_max before normalize
         """
         delta_thres = {'generator_p': 0.1,
                        'generator_v': 0.001,
+                       'load_p': 0.1,
+                       'load_q': 0.1,
                        'station_pg': 0.1,
                        'station_pl': 0.1,
                        'station_ql': 0.1,
@@ -211,6 +265,22 @@ class GHData(object):
         self.input_data[ed_nas] = range_max
         self.input_data.fillna(value=range_min, inplace=True)
         self.input_data.clip(lower=range_min, upper=range_max, inplace=True)
+
+    def normalize_it(self, ori_data, range_min=-1.0, range_max=1.0):
+        deltas = self.column_max - self.column_min + 1e-8
+        norm_data = (range_max - range_min) * \
+                    (ori_data - self.column_min) / deltas + range_min
+        # TODO: deal with ed
+        norm_data[np.isnan(norm_data)] = range_min
+        np.clip(norm_data, range_min, range_max)
+        return norm_data
+
+    def restore_it(self, norm_data, range_min=-1.0, range_max=1.0):
+        deltas = self.column_max - self.column_min
+        ori_data = self.column_min \
+                   + (norm_data - range_min) / (range_max - range_min) * deltas
+        # TODO: deal with ed
+        return ori_data
 
     def drop_times(self, times):
         """
@@ -349,6 +419,7 @@ class GHData(object):
             print("make dataset [%d]" % r,
                   (row_size, column_size, sample_size))
 
+    @staticmethod
     def dataset_generator(self, data, labels, n_batch,
                           is_shuffle=True):
         """
@@ -398,6 +469,7 @@ class GHData(object):
                     np.random.shuffle(indices)
                     round_indices = round_indices[indices]
 
+    @staticmethod
     def dataset_generator_multi(self, datas, labels, n_batch,
                                 is_shuffle=True):
         """
@@ -428,24 +500,21 @@ class GHData(object):
             ys[np.isnan(ys)] = 0.0
             fs = (ys > 0.0)
             fs = fs.astype(np.float32)
-            yield ({'x': xs, 'fault': fs, 'y_': ys}, {})
+            yield {'x': xs, 'fault': fs, 'y_': ys}, {}
             curr += n_batch
 
     def get_dataset(self, id=1):
         """
         Get dataset
 
-        :param role: id
+        :param id: int. role 0/1/2
         :return: tuple(data, labels, indices)
         """
         return self.data_sets.get(id, (None, None, None))
 
 
 if __name__ == '__main__':
-
-    path = "/home/sdy/python/db/2018_11"
-    if os.name == 'nt':
-        path = "d:/python/db/2018_11"
+    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2018_11')
     input_dic = {'generator': ['p', 'v'],
                  'station': ['pg', 'pl', 'ql'],
                  'dcline': ['p', 'q', 'acu'],

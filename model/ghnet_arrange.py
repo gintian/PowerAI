@@ -4,6 +4,7 @@
 @email: sdy@epri.sgcc.com.cn
 """
 
+import os
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
@@ -108,7 +109,9 @@ def group_kv500(file_name, ed):
         # idx = get_index(st_names, names)
         names = ed.index[ed.index.isin(names)]
         sub_ed = ed.loc[names, names]
-        centers.append(sub_ed.sum().idxmin())
+        center = sub_ed.sum().idxmin()
+        layer[center] = names
+        centers.append(center)
     return layer, centers
 
 
@@ -220,14 +223,14 @@ def write_edinfo_from_ghnet(path, centers, level=1):
 if __name__ == '__main__':
     areas = [21, 22, 23, 24]
     # areas = [42, 43]
-    path = "D:/python/db/2019_09_12/db_2019_11_15T10_00_00/"
+    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2019_09_12', 'net')
 
     power = Power(fmt='on')
     power.load_power(path, fmt='on', lp=False, st=False, station=True)
     island = power.get_largest_island()
     ed = calc_ed_from_power(power, island, node_type='station',
                             on_only=False, x_only=False)
-    index = power.stations.loc[ed.index, 'ori_name']
+    index = power.stations.loc[ed.index, 'name']
     ed.index = index
     ed.columns = index
     st_info = load_station_info("%s/st_info.dat" % path)

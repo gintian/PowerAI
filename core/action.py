@@ -20,7 +20,8 @@ def set_values(data, etype, column, values, delta=False):
     :param etype: str. 设备类型。
     :param column: str. 列名。
     :param values: dict. 用于修改指定设备；
-                    or np.array 全部修改的数值。
+                   or np.array 全部修改的数值；
+                   or pd.Series 全部或部分修改的数值。
     :param delta: bool. False表示values为指定值；True表示values为变化量。
     """
     if etype not in data or column not in data[etype]:
@@ -38,7 +39,7 @@ def set_values(data, etype, column, values, delta=False):
             data[etype][column] = values
 
 
-def distribute_generators_p(generators, delta, indices=None, sigma=None):
+def distribute_generators_p(generators, delta, indices=None, sigma=None, clip=True):
     """ 投运机组按比例承担总有功变化量，修改机组表的p0列。
 
     :param generators: pd.DataFrame. 机组数据表。
@@ -47,6 +48,7 @@ def distribute_generators_p(generators, delta, indices=None, sigma=None):
                     or None. 全部投运机组参与。
     :param sigma: float. 随机变化率的方差，变化率~N(1.0, sigma)。
                     or None. 不随机变化。
+    :param clip: bool. 是否保持有功在限值之内。
     :return: float. 分配后的剩余功率，若为0.0代表全部分配完毕。
     """
     sub = generators[generators['mark'] == 1]
@@ -71,11 +73,15 @@ def distribute_generators_p(generators, delta, indices=None, sigma=None):
         margin *= np.random.normal(loc=1.0, scale=sigma, size=(len(margin),))
         margin_sum = np.sum(margin)
     generators.loc[sub.index, 'p0'] = sub['p0'] + margin / margin_sum * delta
+    if clip:
+        generators['p0'] = np.clip(generators['p0'],
+                                   generators['pmin'], generators['pmax'])
+
     return 0.
 
 
 def distribute_loads_p(loads, delta, indices=None, p_sigma=None,
-                       keep_factor=False, factor_sigma=None, clip_q0=True):
+                       keep_factor=False, factor_sigma=None, clip=True):
     """ 负荷按比例承担总有功变化量，修改负荷表的p0和q0列。
 
     :param loads: pd.DataFrame. 负荷数据表。
@@ -87,7 +93,7 @@ def distribute_loads_p(loads, delta, indices=None, p_sigma=None,
     :param keep_factor: bool. 是否保持功率因子不变。
     :param factor_sigma: float. 随机功率因子变化率的方差，变化率~N(1.0, factor_sigma)。
                          or None. 不随机变化。
-    :param clip_q0: bool. 是否保持无功在限值之内。
+    :param clip: bool. 是否保持有功/无功在限值之内。
     """
     sub = loads[(loads['mark'] == 1) & (loads['p'] > 0.)]
     if indices:
@@ -101,9 +107,11 @@ def distribute_loads_p(loads, delta, indices=None, p_sigma=None,
     if p_sigma:
         ratio *= np.random.normal(loc=1.0, scale=p_sigma, size=(len(ratio),))
     loads.loc[sub.index, 'p0'] = sub['p0'] + ratio / np.sum(ratio) * delta
+    if clip:
+        loads['p0'] = np.clip(loads['p0'], loads['pmin'], loads['pmax'])
     if keep_factor:
         loads.loc[sub.index, 'q0'] = loads.loc[sub.index, 'p0'] * factor
-        if clip_q0:
+        if clip:
             loads['q0'] = np.clip(loads['q0'], loads['qmin'], loads['qmax'])
 
 

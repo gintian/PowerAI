@@ -16,7 +16,8 @@ from tensorflow.python.platform import gfile
 
 from model.ghnet_model import GHNet
 from data.ghnet_data import GHData
-from model.ghnet_util import dataset_predict, save_model, write_input, write_output, write_adjust
+from model.ghnet_util import dataset_predict, save_model, load_power_input, \
+    write_input, write_output, write_adjust, load_input
 from common.time_util import timer
 
 if __name__ == '__main__':
@@ -24,10 +25,12 @@ if __name__ == '__main__':
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--res_type', default='cct',
                         help='Result type (cct, sst, vs, stv)')
-    parser.add_argument('--task_type', default='test',
-                        help='Task type (train, test, lmd, feature, match, adjust, app_pb)')
+    parser.add_argument('--task_type', default='test_data',
+                        help='Task type (train, test, test_data, lmd, feature, match, adjust, app_pb)')
     parser.add_argument('--path', default=None,
                         help='Path to data (*.npz), net_path=path/net, res_path=path/res_type')
+    parser.add_argument('--test_path', default=os.path.join(os.path.expanduser('~'), 'data', 'db', '2019_09_12', 'net'),
+                        help='Path to test data (LF.*)')
     parser.add_argument('--dt_begin', default='2018_11_27T10_00_00',
                         help='E format DateTime (yyyy_mm_ddTHH_MM_SS) for begin')
     parser.add_argument('--dt_end', default='2018_11_30T23_59_00',
@@ -36,7 +39,7 @@ if __name__ == '__main__':
                         help='Data set split strategy (random, dt)')
     args = parser.parse_args()
 
-    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2018_11')\
+    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2019_09_12') \
         if args.path is None else args.path
     net_path = path + "/net"
     res_path = path + "/" + args.res_type
@@ -63,8 +66,9 @@ if __name__ == '__main__':
     net.drop_inputs(drops)
     y_columns = list(range(data_set.y.shape[1]))
     if args.res_type == 'cct':
-        targets = ['东北.青北一线', '东北.燕董一线', '东北.丰徐二线']
+        targets = ['东北.青北一线', '东北.燕董一线', '东北.丰徐一线', '东北.伊冯甲线']
         y_columns = data_set.get_y_indices(targets)
+        y_columns = list(range(data_set.y.shape[1]))
     elif args.res_type == 'sst':
         y_columns = [0]
     column_names = data_set.y.columns[y_columns]
@@ -109,6 +113,12 @@ if __name__ == '__main__':
         save_model(res_path, args.res_type, net.pre_model, suffix='h5')
         write_input(data_set, res_path + "/input.txt")
         write_output(data_set.y.columns[y_columns], res_path + "/output.txt")
+    elif args.task_type == 'test_data':
+        net.pre_model.load_weights(res_path + "/" + args.res_type + ".h5")
+        input_fmt = load_input(res_path + '/input.txt')
+        input_data = load_power_input(input_fmt, args.test_path, 'on')[np.newaxis, :]
+        pre = net.pre_model.predict(input_data)
+        print(pre)
     else:
         net.pre_model.load_weights(res_path + "/" + args.res_type + ".h5")
         dt_begin = datetime.datetime.strptime(args.dt_begin, "%Y_%m_%dT%H_%M_%S")
@@ -158,7 +168,6 @@ if __name__ == '__main__':
                                 (input_layer[i][0], input_layer[i][1], lmd[i]))
                         # print("%s=%s, lmd=%f"%(input_layer[i][0], input_layer[i][1], lmd[i]))
     elif args.task_type == 'feature':
-        sess = K.get_session()
         with timer("Timer feature"):
             features = sess.run(net.x_feature['high_out'], feed_dict={net.x: data})
         print(features)
@@ -173,7 +182,7 @@ if __name__ == '__main__':
             dis_df = pd.Series(data=distances, index=data_set.input_data.index)
             dis_df = dis_df[data_set.sample_prop.real]
             for i, (idx, dis) in enumerate(dis_df.sort_values()[:10].items()):
-                print("i = %d, dt = %s, dis = %f" % (i+1, idx, dis))
+                print("i = %d, dt = %s, dis = %f" % (i + 1, idx, dis))
     elif args.task_type == 'adjust':
         cur_data = data_set.ori_data.loc[args.dt_begin].values[data_set.column_valid]
         max_data = data_set.column_max[data_set.column_valid]
