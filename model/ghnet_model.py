@@ -62,7 +62,6 @@ class GHNet(object):
     Attributes:
         name: str. Net name
         input_types: dict{elem_type: [value_type]}. Valid inputs.
-        exclude_areas: [areas]. Invalid areas.
         decay_ratios: [ratios]. Decay ratios for each layer, n_out / n_in = ratio.
         nodes: [[nodes1], [nodes2], ...]. Nodes of each layer, from lower to upper.
         input_layer: [(type, name)]. The same as GHData
@@ -83,19 +82,16 @@ class GHNet(object):
         gradients: [tf.Tensor]. Gradients for each y to x.
     """
 
-    def __init__(self, name, input_types, exclude_areas=None,
-                 decay_ratios=None):
+    def __init__(self, name, input_types, decay_ratios=None):
         """
         Initial method
 
         :param name: str. Net name
         :param input_types: dict{elem_type: [value_type]}. Valid inputs.
-        :param exclude_areas: [areas]. Invalid areas.
         :param decay_ratios: [ratios]. Decay ratios for each layer, n_out / n_in = ratio.
         """
         self.name = name
         self.input_types = input_types
-        self.exclude_areas = exclude_areas or []
         self.decay_ratios = decay_ratios or [0.5] * 8
         self.nodes = []
         self.input_layer = []
@@ -263,20 +259,27 @@ class GHNet(object):
                 ret.extend(
                     [('station_' + it, st_name) for it in self.input_types['station']
                      if it in {'pl', 'ql'}])
+            elif 41 <= st.type <= 46:
+                ret.extend(
+                    [('station_' + it, st_name) for it in self.input_types['station']
+                     if it in {'pl', 'ql'}])
             # else:
             # 	ret.extend([('station_' + it,st_name)
             #               for it in self.input_types['station']])
-        if 'dcline' in self.input_types:
-            if 41 <= st.type <= 44:
-                ret.extend([('dcline_' + it, st_name)
-                            for it in self.input_types['dcline']])
+        # if 'dcline' in self.input_types:
+        #     if 41 <= st.type <= 44:
+        #         ret.extend([('dcline_' + it, st_name)
+        #                     for it in self.input_types['dcline']])
         return ret
 
-    def load_net(self, path):
+    def load_net(self, path, out_node=None, include_areas=[], exclude_names=[]):
         """
         Load ghnet.dat
 
         :param path: str. Contains ghnet.dat, st_info.dat, elem_info.dat.
+        :param out_node: str or None. Output node name.
+        :param include_areas: [int]. Include areas, [] for all.
+        :param exclude_names: [str]. Exclude station names.
         :return:
         """
         self.ghnet = pd.read_table(path + '/ghnet.dat', encoding='gbk', sep=' ')
@@ -285,22 +288,22 @@ class GHNet(object):
         self.elem_info = load_elem_info(path + '/elem_info.dat')
         self.gens = self.elem_info[self.elem_info['type'] == 5]
         self.ed_info = pd.read_table(path + '/ed_info.dat', encoding='gbk', sep=' ')
+        self.trim_net(out_node, include_areas, exclude_names, inplace=True)
 
         # input stations
         self.nodes = []
         used_input_names = set()
         upper_names = []
         start = 0
-        input_layer_no = np.min(self.ghnet['layer'])
-        for layer in range(input_layer_no, np.max(self.ghnet['layer']) + 1):
+        input_layer_no = self.ghnet['layer'].min()
+        for layer in range(input_layer_no, self.ghnet['layer'].max() + 1):
             lower_names = upper_names.copy()
             upper_names = []
             used_subnet_names = []
             nodes = []
             for _, sub in self.ghnet[self.ghnet['layer'] == layer].iterrows():
-                if sub['upper'] in self.st_info.index and \
-                        self.st_info.loc[sub['upper']]['area'] in self.exclude_areas:
-                    continue
+                # if sub['upper'] in self.st_info.index:
+                #     continue
                 ss = sub['lower'].split('+')
                 # ss.append(sub['upper'])
                 # ss = list(set(ss))
@@ -335,6 +338,75 @@ class GHNet(object):
                 # raise NotImplementedError('%d node(s) are not connected'%len(not_used_lower))
             self.nodes.append(nodes)
         print("load ghnet successfully")
+
+    def trim_net(self, out_node=None, include_areas=[], exclude_names=[], inplace=True):
+        """ Trim net
+        Remove nodes not in out_node's tree,
+        Remove stations not in include_areas,
+        Remove stations not in exclude_names.
+
+        :param out_node: str or None. Output node name.
+        :param include_areas: [int]. Include areas, [] for all.
+        :param exclude_names: [str]. Exclude station names.
+        :param inplace: bool. Trim self.ghnet.
+        :return: A new GHNet.
+        """
+        stations = []
+        for name, area in self.st_info['area'].items():
+            if name not in exclude_names and \
+                    (not include_areas or area in include_areas):
+                stations.append(name)
+        valid = self.ghnet['upper'].isin(stations) | (self.ghnet['layer'] > 2)
+        new_ghnet = self.ghnet.loc[valid]
+        for idx in new_ghnet[new_ghnet['layer'] <= 3].index:
+            names = [n for n in new_ghnet.loc[idx, 'lower'].split('+') if n in stations]
+            if not names:
+                new_ghnet.drop(index=idx, inplace=True)
+            else:
+                new_ghnet.loc[idx, 'lower'] = '+'.join(names)
+
+        if out_node:
+            out_df = new_ghnet[new_ghnet['upper'] == out_node]
+        else:
+            out_df = new_ghnet[new_ghnet['layer'] == np.max(new_ghnet['layer'])]
+        if out_df.shape[0] != 1:
+            raise ValueError('out node size = %d' % out_df.shape[0])
+        idx = out_df.index[0]
+        valid = (new_ghnet.index == idx) | (new_ghnet['layer'] < out_df.loc[idx, 'layer'])
+        new_ghnet = new_ghnet.loc[valid]
+        for layer in range(4, out_df.loc[idx, 'layer'] + 1):
+            lower_names = set(new_ghnet.loc[new_ghnet['layer'] == layer - 1, 'upper'])
+            for idx in new_ghnet[new_ghnet['layer'] == layer].index:
+                names = [n for n in new_ghnet.loc[idx, 'lower'].split('+') \
+                         if n in lower_names]
+                if not names:
+                    new_ghnet.drop(index=idx, inplace=True)
+                else:
+                    new_ghnet.loc[idx, 'lower'] = '+'.join(names)
+        for layer in range(out_df.loc[idx, 'layer'] - 1, 0, -1):
+            upper_names = '+'.join(new_ghnet.loc[new_ghnet['layer'] == layer + 1, 'lower'])
+            upper_names = set(upper_names.split('+'))
+            for idx in new_ghnet[new_ghnet['layer'] == layer].index:
+                if new_ghnet.loc[idx, 'upper'] not in upper_names:
+                    new_ghnet.drop(index=idx, inplace=True)
+        if inplace:
+            self.ghnet = new_ghnet
+        return new_ghnet
+
+    def check_net(self):
+        layers = range(self.ghnet['layer'].max(), self.ghnet['layer'].min(), -1)
+        for layer in layers:
+            upper_names = '+'.join(self.ghnet.loc[self.ghnet['layer'] == layer, 'lower'])
+            upper_names = set(upper_names.split('+'))
+            lower_names = set(self.ghnet.loc[self.ghnet['layer'] == layer-1, 'upper'])
+            diff = upper_names.difference(lower_names)
+            if diff and layer != 2:
+                print('layer[%d] - layer[%d]:' % (layer, layer-1))
+                print(diff)
+            diff = lower_names.difference(upper_names)
+            if diff:
+                print('layer[%d] - layer[%d]:' % (layer-1, layer))
+                print(diff)
 
     def print_node(self, node, fp=sys.stdout):
         """
@@ -441,17 +513,23 @@ class Node:
 
 if __name__ == '__main__':
 
-    path = "/home/sdy/python/db/2018_11"
-    if os.name == 'nt':
-        path = "d:/python/db/2018_11"
+    path = os.path.join(os.path.expanduser('~'), 'data', 'gd', '2020')
     input_dic = {'generator': ['p', 'v'],
                  'station': ['pg', 'pl', 'ql'],
                  'dcline': ['p', 'q', 'acu'],
                  'ed': ['ed']}
     net = GHNet("inf", input_dic)
-    net.load_net(path + "/net")
+    out_node = 'GD'
+    include_areas = [41, 42, 43, 46,
+                     51, 52, 53, 54, 55,
+                     84, 85, 86]
+    exclude_names = []
+    # net.load_net(path + "/net")
+    net.load_net(path + "/net", out_node=out_node, include_areas=include_areas,
+                 exclude_names=exclude_names)
+    net.check_net()
     with open(path + "/net/ghnet_out.txt", "w") as f:
         net.print_node(net.nodes[-1][0], f)
     # net.drop_inputs(np.array(range(320)))
-    net.build_inf()
-    net.build_multi_reg(2)
+    # net.build_inf()
+    # net.build_multi_reg(2)

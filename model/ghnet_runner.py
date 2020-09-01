@@ -16,7 +16,7 @@ from tensorflow.python.platform import gfile
 
 from model.ghnet_model import GHNet
 from data.ghnet_data import GHData
-from model.ghnet_util import dataset_predict, save_model, load_power_input, \
+from model.ghnet_util import dataset_predict, save_model, load_model, load_power_input, \
     write_input, write_output, write_adjust, load_input
 from common.time_util import timer
 
@@ -115,6 +115,7 @@ if __name__ == '__main__':
         write_output(data_set.y.columns[y_columns], res_path + "/output.txt")
     elif args.task_type == 'test_data':
         net.pre_model.load_weights(res_path + "/" + args.res_type + ".h5")
+        # net.pre_model = load_model(res_path, '', suffix='tf')
         input_fmt = load_input(res_path + '/input.txt')
         input_data = load_power_input(input_fmt, args.test_path, 'on')[np.newaxis, :]
         pre = net.pre_model.predict(input_data)

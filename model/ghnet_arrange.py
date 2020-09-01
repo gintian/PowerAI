@@ -45,16 +45,13 @@ def group_kv220(areas, st_info, ed):
     layer = {}
     for area in areas:
         sub_st = st_info[st_info["area"] == area] if area > 0 else st_info
-        lower_names = sub_st[sub_st["vl"] <= 220].index.values
+        lower_names = sub_st[sub_st["vl"] <= 330].index.values
         lower_names = ed.index[ed.index.isin(lower_names)]
-        upper_names = sub_st[st_info["vl"] >= 500].index.values
+        upper_names = sub_st[sub_st["vl"] >= 500].index.values
         upper_names = ed.columns[ed.columns.isin(upper_names)]
         sub_ed = ed.loc[lower_names, upper_names]
         for lower, upper in sub_ed.idxmin(axis=1).iteritems():
-            if upper in layer.keys():
-                layer[upper].append(lower)
-            else:
-                layer[upper] = [lower]
+            layer[upper] = layer.get(upper, []) + [lower]
     return layer
 
 
@@ -126,11 +123,8 @@ def group_province(st_info, centers, provinces):
     """
     layer = {}
     for c in centers:
-        area = provinces[st_info['area'][c]]
-        if area in layer.keys():
-            layer[area].append(c)
-        else:
-            layer[area] = [c]
+        area = provinces[st_info.loc[c, 'area']]
+        layer[area] = layer.get(area, []) + [c]
     return layer
 
 
@@ -221,46 +215,51 @@ def write_edinfo_from_ghnet(path, centers, level=1):
 
 
 if __name__ == '__main__':
-    areas = [21, 22, 23, 24]
-    # areas = [42, 43]
-    path = os.path.join(os.path.expanduser('~'), 'data', 'db', '2019_09_12', 'net')
-
-    power = Power(fmt='on')
-    power.load_power(path, fmt='on', lp=False, st=False, station=True)
-    island = power.get_largest_island()
-    ed = calc_ed_from_power(power, island, node_type='station',
-                            on_only=False, x_only=False)
-    index = power.stations.loc[ed.index, 'name']
-    ed.index = index
-    ed.columns = index
-    st_info = load_station_info("%s/st_info.dat" % path)
-    st_info["area"].replace(12, 11, inplace=True)
-    st_info["area"].replace(18, 11, inplace=True)
-
     provinces = {1: 'GD',
                  10: 'HB', 20: 'DB', 30: 'HD', 40: 'HZ', 50: 'XB', 80: 'XN',
                  11: 'JingJinJi', 12: 'Tianjin', 13: 'Hebei', 14: 'Shanxi', 15: 'Neimeng', 16: 'Shandong', 18: 'Jibei',
                  21: 'Liaoning', 22: 'Jilin', 23: 'Heilongjiang', 24: 'Mengdong',
-                 41: 'Henan', 42: 'Hubei', 43: 'Hunan', 44: 'Chongqing', 45: 'Sichuan', 46: 'Jiangxi'}
+                 31: 'Shanghai', 32: 'Jiangsu', 33: 'Zhejiang', 34: 'Anhui', 35: 'Fujian',
+                 41: 'Henan', 42: 'Hubei', 43: 'Hunan', 46: 'Jiangxi',
+                 51: 'Shaanxi', 52: 'Gansu', 53: 'Qinghai', 54: 'Ningxia', 55: 'Xinjiang',
+                 84: 'Chongqing', 85: 'Sichuan', 86: 'Xizang'}
+    path = os.path.join(os.path.expanduser('~'), 'data', 'gd', '2020', 'net')
 
-    layer1 = group_kv220([-1], st_info, ed)
-    # layer1 = trans_layer(layer1, st_names)
+    power = Power(fmt='on')
+    power.load_power(path, fmt='on', lp=False, st=False, station=True)
+    islands = list(set(power.data['bus']['island']))
+    islands = [i for i in islands if 0 <= i < 5]
+    st_info = load_station_info("%s/st_info.dat" % path)
+    st_info["area"].replace(12, 11, inplace=True)
+    st_info["area"].replace(18, 11, inplace=True)
 
-    group_kv500_kmeans(areas, st_info, ed, "%s/g500.txt" % path)
-    layer2, centers = group_kv500("%s/g500.txt" % path, ed)
-    # layer2 = trans_layer(layer2, st_names)
+    layer1, layer2, layer3 = {}, {}, {}
+    for island in islands:
+        areas = list(set(st_info.loc[st_info['island']==island, 'area']))
+        areas.sort()
+        ed = calc_ed_from_power(power, island, node_type='station',
+                                on_only=False, x_only=False)
+        index = power.stations.loc[ed.index, 'name']
+        ed.index = index
+        ed.columns = index
+        sub1 = group_kv220(areas, st_info, ed)
+        layer1.update(sub1)
 
-    layer3 = group_province(st_info, centers, provinces)
+        group_kv500_kmeans(areas, st_info, ed, "%s/g500.txt" % path)
+        sub2, centers = group_kv500("%s/g500.txt" % path, ed)
+        layer2.update(sub2)
 
-    layer4 = {}
-    # layer4[provinces[10]] = [provinces[11],provinces[13],provinces[14],provinces[15],provinces[16]]
-    # layer4[provinces[40]] = [provinces[41],
-    #                          provinces[42], provinces[43], provinces[46]]
-    # layer4[provinces[80]] = [provinces[44],provinces[45]]
-    layer4[provinces[20]] = [provinces[21], provinces[22], provinces[23]]
+        sub3 = group_province(st_info, centers, provinces)
+        layer3.update(sub3)
 
-    # layer5 = {}
-    # layer5[provinces[1]] = [provinces[10],provinces[40],provinces[80]]
+    layer4 = {provinces[10]: [provinces[11], provinces[13], provinces[14], provinces[15], provinces[16]],
+              provinces[20]: [provinces[21], provinces[22], provinces[23]],
+              provinces[30]: [provinces[31], provinces[32], provinces[33], provinces[34], provinces[35]],
+              provinces[40]: [provinces[41], provinces[42], provinces[43], provinces[46]],
+              provinces[50]: [provinces[51], provinces[52], provinces[53], provinces[54], provinces[55]],
+              provinces[80]: [provinces[84], provinces[85], provinces[86]]}
 
-    write_layers(path, [layer1, layer2, layer3, layer4])
-    # write_layers(path, [layer1,layer2,layer3,layer4])
+    layer5 = {provinces[1]: [provinces[10], provinces[20], provinces[30],
+                             provinces[40], provinces[50], provinces[80]]}
+
+    write_layers(path, [layer1, layer2, layer3, layer4, layer5])

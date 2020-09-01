@@ -157,14 +157,15 @@ def get_element_names(e_file, out_file, name_info):
 
 
 if __name__ == '__main__':
-    '''
-    file_name = 'D:/PSASP_Pro/2020国调年度/冬低731/DataMap.txt'
-    table_names = ['Grid', 'Station', 'Bus']
+
+    # '''
+    file_name = os.path.join(os.path.expanduser('~'), 'data', 'gd', 'E', 'gd_20200729_1300_new.QS')
+    # table_names = ['Grid', 'Station', 'Bus']
     with timer('Read E File repeat'):
         tables = read_efile(file_name)
-    with timer('Read E File buffer'):
-        tables = read_efile_buffer(file_name)
-    '''
+    # with timer('Read E File buffer'):
+    #     tables = read_efile_buffer(file_name)
+    # '''
 
     '''
     path = 'D:/python/db/2019_09_12/2019_10_01T01_20_00/'
@@ -172,6 +173,7 @@ if __name__ == '__main__':
     update_table_header(path, 'res', headers)
     '''
 
+    '''
     e_file = os.path.join(os.path.expanduser('~'), 'data', 'bj', 'BJ_20200420_000000.QS')
     out_file = os.path.join(os.path.expanduser('~'), 'data', 'bj', 'names.txt')
     name_info = {'Substation': ('name', [1]),
@@ -185,3 +187,4 @@ if __name__ == '__main__':
                  'Breaker': ('name', [1, 3]),
                  'Disconnector': ('name', [1, 3])}
     get_element_names(e_file, out_file, name_info)
+    '''

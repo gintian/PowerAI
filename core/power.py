@@ -61,6 +61,10 @@ def load_station_info(file_name, index_col=['name']):
     :return: pd.DataFrame. 厂站信息表。
     """
     st_info = pd.read_table(file_name, encoding='gbk', sep=' ', index_col=index_col)
+    indices = []
+    for i in st_info.index:
+        indices.append(i if '_' not in i else i.split('_')[0])
+    st_info.index = indices
     return st_info
 
 
@@ -691,9 +695,13 @@ class Power:
         if 'generator' in self.data:
             self.data['generator']['v'] = \
                 self.data['bus'].loc[self.data['generator']['bus'], 'v']
+            not_valid = ~Power.get_flag(self.data['generator'], 'lp')
+            self.data['generator'].loc[not_valid, 'v'] = np.nan
         if 'load' in self.data:
             self.data['load']['v'] = \
                 self.data['bus'].loc[self.data['load']['bus'], 'v'].values
+            not_valid = ~Power.get_flag(self.data['load'], 'lp')
+            self.data['load'].loc[not_valid, 'v'] = np.nan
         if 'station' in self.data:
             generators = self.data['generator']
             valid = generators['mark'] == 1
