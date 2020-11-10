@@ -64,13 +64,13 @@ class OpEnv(object):
             return os.path.join(self.work_path, 'ep%06d' % ep)
         return os.path.join(self.work_path, 'ep%06d' % ep, str(step))
 
-    def reset(self, random=True, load_path=None, max_try=10):
+    def reset(self, random=True, load_path=None, error='raise'):
         """ 重置潮流，并进行评估。
 
         :param random: bool. 是否随机初始化潮流。
         :param load_path: str. 初始断面目录；
                           or None. 用self.base_path作为初始断面。
-        :param max_try: int. 最大重试次数。
+        :param errpr: str. 初始化失败则raise exception.
         :return: bool. 是否重置成果(not done)
         """
         load_path = self.base_path if load_path is None else load_path
@@ -80,27 +80,26 @@ class OpEnv(object):
         path = self.get_ep_path()
         shutil.rmtree(path, ignore_errors=True)
         os.mkdir(path)
-        for _ in range(max(1, max_try)):
-            self.step = -1
-            self.assessments = []
-            self.power.load_power(load_path, fmt=self.fmt)
-            if random:
-                generators = self.power.data['generator']
-                loads = self.power.data['load']
-                generators['p0'] = generators['p']
-                # gl_rate = np.sum(generators['p']) / np.sum(loads['p'])
-                max_p, p0 = np.sum(generators[['pmax', 'p0']])
-                p = max_p * (0.4 + 0.5 * np.random.rand())  # 40% ~ 90%
-                distribute_generators_p(generators, p - p0, sigma=0.2)
-                # dp = np.sum(generators['p0']) - p0
-                gen_p = np.sum(generators['p0'])
-                load_p = np.sum(loads['p0'])
-                distribute_loads_p(loads, 0.9 * gen_p - load_p, p_sigma=0.1, keep_factor=False)
-                # distribute_loads_p(loads, dp / gl_rate, p_sigma=0.1, keep_factor=False)
-                random_load_q0(loads, sigma=None)
-            self.state0, _, done = self.run_step()
-            if not done:
-                break
+        self.step = -1
+        self.assessments = []
+        self.power.load_power(load_path, fmt=self.fmt)
+        if random:
+            generators = self.power.data['generator']
+            loads = self.power.data['load']
+            generators['p0'] = generators['p']
+            # gl_rate = np.sum(generators['p']) / np.sum(loads['p'])
+            max_p, p0 = np.sum(generators[['pmax', 'p0']])
+            p = max_p * (0.4 + 0.5 * np.random.rand())  # 40% ~ 90%
+            distribute_generators_p(generators, p - p0, sigma=0.2)
+            # dp = np.sum(generators['p0']) - p0
+            gen_p = np.sum(generators['p0'])
+            load_p = np.sum(loads['p0'])
+            distribute_loads_p(loads, 0.9 * gen_p - load_p, p_sigma=0.1, keep_factor=False)
+            # distribute_loads_p(loads, dp / gl_rate, p_sigma=0.1, keep_factor=False)
+            random_load_q0(loads, sigma=None)
+        self.state0, _, done = self.run_step()
+        if done and error == 'raise':
+            raise ValueError
         return not done
 
     def get_state(self, normalize=True):
@@ -151,7 +150,8 @@ class OpEnv(object):
         for file_name in os.listdir(path):
             if file_name.endswith('.res'):
                 cct = read_efile(os.path.join(path, file_name), iwant.keys(), iwant)
-                results.append(cct['CCTOUT']['cct'])
+                if 'CCTOUT' in cct:
+                    results.append(cct['CCTOUT']['cct'])
         results = pd.concat(results)
         values = results.values.reshape(-1, )
         values = values[~np.isnan(values)]
@@ -165,7 +165,7 @@ class OpEnv(object):
         elif method == 'avg':
             return np.average(values), False, results
         elif method == 'grade':
-            thrs = kwargs.get('min_n', [0.3, 0.5])
+            thrs = kwargs.get('grades', [0.3, 0.5])
             for thr in thrs:
                 values_lt = values[values < thr]
                 if len(values_lt) > 0:
@@ -215,8 +215,8 @@ class OpEnv(object):
         if self.step == 0:
             reward = 0.
         else:
-            # reward = self.assessments[-1] - self.assessments[-2] + STEP_REWARD
-            reward = assess
+            reward = self.assessments[-1] - self.assessments[-2] + STEP_REWARD
+            # reward = assess
             if not done:
                 # reward *= CCT_CHANGE_RATIO
                 loads = self.power.data['load']
@@ -397,7 +397,7 @@ if __name__ == '__main__':
     ax_load.set_ylabel('Load P')
     ax_load.legend(loc='best', ncol=2)
     ax_score = fig.add_subplot(3, 1, 3)
-    score_labels = ['PPO', 'NOP', 'DIS']
+    score_labels = ['PPO', 'NOP', 'AGC']
     for idx in scores.index:
         ax_score.plot(x, scores.loc[idx], 'o-', label=score_labels[idx])
     ax_score.set_xlabel('Round')

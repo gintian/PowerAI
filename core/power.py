@@ -13,7 +13,7 @@ from itertools import chain
 from collections import Counter
 
 from common.time_util import timer
-from core.power_def import format_key, format_type, file_format, index_dict, \
+from core.power_def import format_key, format_type, file_format, index_dict, name_index_dict,\
     output_format, multi_line_header, useless_column, \
     set_format_version, get_format_version
 from core.topo import PowerGraph
@@ -591,6 +591,8 @@ class Power:
                 continue
             dtypes = self.data[e].dtypes
             ex = self.format_key[e][1]
+            if ex is None:
+                continue
             lp_columns = self.get_flat_columns(fmt, e, ex)
             columns = [col for col in self.data[e].columns if dtypes[col].kind == 'i']
             if columns:
@@ -793,6 +795,24 @@ class Power:
         print('pr=%d, on=%d' % (count_pr, count_pr_on))
         print('sr=%d, on=%d' % (count_sr, count_sr_on))
         print('bs=%d, on=%d' % (count_bs, count_bs_on))
+
+    def set_index(self, types=None, idx='no'):
+        """ 设置表索引
+
+        :param types: list. 需要设置的设备类型。
+        :param idx: str, no or name. 按编号设置或按名称设置。
+        """
+        if not types:
+            types = self.format_key['types']
+        if idx == 'no':
+            indices = self.index_dict
+        elif idx == 'name':
+            indices = name_index_dict()
+        else:
+            raise NotImplementedError
+        types = [t for t in types if t in indices.keys() and t in self.data.keys()]
+        for t in types:
+            self.data[t].set_index(indices[t], drop=False, inplace=True)
 
 
 if __name__ == '__main__':

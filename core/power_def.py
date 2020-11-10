@@ -42,6 +42,7 @@ def format_key():
         lcc=('ml4', 'mp4', None),
         mdcline=('ml4', 'mp4', None),
         dcdc=('ml4', 'mp4', None),
+        station=(None, None, None),
         # file key infos
         lf=('l1', 'l2', 'l3', 'l5', 'l6', 'nl4', 'ml4'),
         lp=('lp1', 'lp2', 'lp3', 'lp5', 'lp6', 'np4', 'mp4'),
@@ -380,7 +381,7 @@ def index_dict():
 def name_index_dict():
     return dict(
         bus=['name'], acline=['name'], transformer=['name', 'trs_type'],
-        generator=['name'], load=['name', 'no'], dcline=['name', 'no'],
+        generator=['name'], load=['name'], dcline=['name', 'no'],
         dcbus=['name'], vsc=['name'], lcc=['name'], mdcline=['name'], dcsys=['id']
     )
 

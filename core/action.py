@@ -5,10 +5,14 @@
 """
 
 import numpy as np
+import pandas as pd
 import random
+import os
+import shutil
 
 from core.power import Power
 from core.topo import PowerGraph
+from common.cmd_util import call_wmlf, check_lfcal
 
 EPS = 1e-8
 
@@ -29,9 +33,9 @@ def set_values(data, etype, column, values, delta=False):
     if isinstance(values, dict):
         for k in values:
             if delta:
-                data[etype].loc[k, column] += values
+                data[etype].loc[k, column] += values[k]
             else:
-                data[etype].loc[k, column] = values
+                data[etype].loc[k, column] = values[k]
     else:
         if delta:
             data[etype][column] += values
@@ -56,15 +60,15 @@ def distribute_generators_p(generators, delta, indices=None, sigma=None, clip=Tr
         indices = [i for i in indices if i in sub.index]
         sub = sub.loc[indices]
     if delta > 0.:
-        sub = sub[sub['pmax'] > sub['p']]
-        margin = sub['pmax'] - sub['p']
+        sub = sub[sub['pmax'] > sub['p0']]
+        margin = sub['pmax'] - sub['p0']
         margin_sum = np.sum(margin)
         if margin_sum <= delta:  # not enough
             generators.loc[sub.index, 'p0'] = sub['pmax']
             return delta - margin_sum
     else:
-        sub = sub[sub['p'] > sub['pmin']]
-        margin = sub['p'] - sub['pmin']
+        sub = sub[sub['p0'] > sub['pmin']]
+        margin = sub['p0'] - sub['pmin']
         margin_sum = np.sum(margin)
         if margin_sum <= -delta:  # not enough
             generators.loc[sub.index, 'p0'] = sub['pmin']
@@ -95,15 +99,15 @@ def distribute_loads_p(loads, delta, indices=None, p_sigma=None,
                          or None. 不随机变化。
     :param clip: bool. 是否保持有功/无功在限值之内。
     """
-    sub = loads[(loads['mark'] == 1) & (loads['p'] > 0.)]
+    sub = loads[(loads['mark'] == 1) & (loads['p0'] > 0.)]
     if indices:
         indices = [i for i in indices if i in sub.index]
         sub = sub.loc[indices]
     if keep_factor:
-        factor = sub['q'] / sub['p']
+        factor = sub['q0'] / sub['p0']
         if factor_sigma:
             factor *= np.random.normal(loc=1.0, scale=factor_sigma, size=(len(factor),))
-    ratio = sub['p']
+    ratio = sub['p0']
     if p_sigma:
         ratio *= np.random.normal(loc=1.0, scale=p_sigma, size=(len(ratio),))
     loads.loc[sub.index, 'p0'] = sub['p0'] + ratio / np.sum(ratio) * delta
@@ -202,9 +206,47 @@ def random_open_acline(power, num, keep_link=True):
     return ret
 
 
+def load_actions(power, base_path, out_path, files, fmt='on', st=True, wmlf=True):
+    """ 从文件加载并执行修改动作
+
+    :param power: Power. Power实例。
+    :param base_path: str. 基础数据目录。
+    :param out_path: str. 输出目录，输入的动作文件也在这里。
+    :param files: [str]. 文件列表。
+    :param fmt: str. 数据格式类型。
+    :param st: bool. 是否输出ST*文件。
+    :param wmlf: bool. 是否计算潮流。
+    :return dict. 每个文件对应目录的输出是否成功（潮流是否收敛）
+    """
+    ret = {}
+    if not power:
+        power = Power(fmt=fmt)
+        power.load_power(base_path, fmt=fmt, lp=False, st=st)
+        power.set_index(idx='name')
+    for f in files:
+        actions = pd.read_csv(os.path.join(out_path, f), encoding='gbk', index_col=False)
+        for _, etype, idx, dtype, value in actions.itertuples():
+            set_values(power.data, etype, dtype, {idx: value})
+        if '.' in f:
+            name = f[:f.index('.')]
+        path = os.path.join(out_path, name)
+        power.save_power(path, fmt=power.fmt, lp=False, st=st)
+        shutil.copy(os.path.join(base_path, 'LF.L0'), path)
+        if st:
+            shutil.copy(os.path.join(base_path, 'ST.S0'), path)
+        if wmlf:
+            call_wmlf(path)
+            ret[name] = check_lfcal(path)
+        else:
+            ret[name] = True
+    return ret
+
+
 if __name__ == '__main__':
-    path = '../dataset/wepri36'
+    base_path = os.path.join(os.path.expanduser('~'), 'data', 'wepri36', 'wepri36')
+    out_path = os.path.join(os.path.expanduser('~'), 'data', 'wepri36', 'actions')
     fmt = 'off'
     power = Power(fmt)
-    power.load_power(path, fmt=fmt, lp=False, st=False, station=True)
-    random_open_acline(power, 2)
+    power.load_power(base_path, fmt=fmt, lp=False, st=False)
+    power.set_index(idx='name')
+    ret = load_actions(power, base_path, out_path, files=['1.txt', '2.txt'], st=False, wmlf=True)
